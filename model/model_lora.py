@@ -1,5 +1,5 @@
 import torch
-from torch import optim, nn
+from torch import nn
 
 
 # 定义Lora网络结构
@@ -23,8 +23,13 @@ class LoRA(nn.Module):
 def apply_lora(model, rank=16, lora_alpha=None):
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear) and module.in_features == module.out_features:
-            lora = LoRA(module.in_features, module.out_features, rank=rank, lora_alpha=lora_alpha).to(model.device)
-            setattr(module, "lora", lora)
+            lora = LoRA(
+                module.in_features,
+                module.out_features,
+                rank=rank,
+                lora_alpha=lora_alpha,
+            ).to(model.device)
+            module.lora = lora
             original_forward = module.forward
 
             # 显式绑定
@@ -36,35 +41,50 @@ def apply_lora(model, rank=16, lora_alpha=None):
 
 def load_lora(model, path):
     state_dict = torch.load(path, map_location=model.device)
-    state_dict = {(k[7:] if k.startswith('module.') else k): v for k, v in state_dict.items()}
+    state_dict = {(k.removeprefix("module.")): v for k, v in state_dict.items()}
 
     for name, module in model.named_modules():
-        if hasattr(module, 'lora'):
-            lora_state = {k.replace(f'{name}.lora.', ''): v for k, v in state_dict.items() if f'{name}.lora.' in k}
+        if hasattr(module, "lora"):
+            lora_state = {
+                k.replace(f"{name}.lora.", ""): v
+                for k, v in state_dict.items()
+                if f"{name}.lora." in k
+            }
             module.lora.load_state_dict(lora_state, strict=False)
 
 
 def save_lora(model, path):
-    raw_model = getattr(model, '_orig_mod', model)
+    raw_model = getattr(model, "_orig_mod", model)
     state_dict = {}
     for name, module in raw_model.named_modules():
-        if hasattr(module, 'lora'):
-            clean_name = name[7:] if name.startswith("module.") else name
-            lora_state = {f'{clean_name}.lora.{k}': v.cpu().half() if k.endswith('.weight') else v.cpu().float()
-                          for k, v in module.lora.state_dict().items()}
+        if hasattr(module, "lora"):
+            clean_name = name.removeprefix("module.")
+            lora_state = {
+                f"{clean_name}.lora.{k}": v.cpu().half()
+                if k.endswith(".weight")
+                else v.cpu().float()
+                for k, v in module.lora.state_dict().items()
+            }
             state_dict.update(lora_state)
     torch.save(state_dict, path)
 
 
 def merge_lora(model, lora_path, save_path):
     load_lora(model, lora_path)
-    raw_model = getattr(model, '_orig_mod', model)
-    state_dict = {k: v.cpu().half() for k, v in raw_model.state_dict().items() if '.lora.' not in k}
+    raw_model = getattr(model, "_orig_mod", model)
+    state_dict = {
+        k: v.cpu().half()
+        for k, v in raw_model.state_dict().items()
+        if ".lora." not in k
+    }
     for name, module in raw_model.named_modules():
-        if isinstance(module, nn.Linear) and '.lora.' not in name:
-            state_dict[f'{name}.weight'] = module.weight.data.clone().cpu().float()
-            if hasattr(module, 'lora'):
-                delta = (module.lora.B.weight.data.float() @ module.lora.A.weight.data.float()) * module.lora.scaling.float()
-                state_dict[f'{name}.weight'] += delta.cpu()
-            state_dict[f'{name}.weight'] = state_dict[f'{name}.weight'].half()
+        if isinstance(module, nn.Linear) and ".lora." not in name:
+            state_dict[f"{name}.weight"] = module.weight.data.clone().cpu().float()
+            if hasattr(module, "lora"):
+                delta = (
+                    module.lora.B.weight.data.float()
+                    @ module.lora.A.weight.data.float()
+                ) * module.lora.scaling.float()
+                state_dict[f"{name}.weight"] += delta.cpu()
+            state_dict[f"{name}.weight"] = state_dict[f"{name}.weight"].half()
     torch.save(state_dict, save_path)

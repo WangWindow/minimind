@@ -1,13 +1,16 @@
-import os
-import time
 import argparse
+import os
 import random
+import time
 import warnings
+
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, TextStreamer
-from model.model_minimind import MiniMindConfig, MiniMindForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextStreamer
+
 from model.model_lora import *
-from trainer.trainer_utils import setup_seed, get_model_params
+from model.model_minimind import MiniMindConfig, MiniMindForCausalLM
+from trainer.trainer_utils import get_model_params, setup_seed
+
 warnings.filterwarnings('ignore')
 
 def init_model(args):

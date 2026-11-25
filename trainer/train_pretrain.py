@@ -4,19 +4,31 @@ import sys
 __package__ = "trainer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
 import argparse
 import time
 import warnings
+from contextlib import nullcontext
+
+import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
 import torch
 import torch.distributed as dist
-from contextlib import nullcontext
-from torch import optim, nn
+from torch import optim
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
-from model.model_minimind import MiniMindConfig
+
 from dataset.lm_dataset import PretrainDataset
-from trainer.trainer_utils import get_lr, Logger, is_main_process, lm_checkpoint, init_distributed_mode, setup_seed, init_model, SkipBatchSampler, resolve_dtype
+from model.model_minimind import MiniMindConfig
+from trainer.trainer_utils import (
+    Logger,
+    SkipBatchSampler,
+    get_lr,
+    init_distributed_mode,
+    init_model,
+    is_main_process,
+    lm_checkpoint,
+    resolve_dtype,
+    setup_seed,
+)
 
 warnings.filterwarnings('ignore')
 

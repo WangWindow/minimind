@@ -1,8 +1,9 @@
 # 注：不建议再重复训练tokenizer（“词典”），MiniMind已自带，此脚本仅供学习和参考。基于不同词典训练的模型将导致输出完全不统一，降低社区的模型复用性
 # Note: It is not recommended to re-train the tokenizer. MiniMind already includes one. This script is for learning and reference only. Training models with different tokenizers will lead to inconsistent outputs and reduce model reusability in the community.
-import os
 import json
-from tokenizers import decoders, models, pre_tokenizers, trainers, Tokenizer
+import os
+
+from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 
 DATA_PATH = '../dataset/sft_t2t_mini.jsonl'
 TOKENIZER_DIR = '../model_learn_tokenizer/'
@@ -181,7 +182,7 @@ def eval_tokenizer(tokenizer_dir):
         if current_decode and '\ufffd' not in current_decode:
             display_ids = token_cache[0] if len(token_cache) == 1 else token_cache
             raw_tokens = [tokenizer.convert_ids_to_tokens(int(t)) for t in (token_cache if isinstance(token_cache, list) else [token_cache])]
-            print(f'Token ID: {str(display_ids):15} -> Raw: {str(raw_tokens):20} -> Decode Str: {current_decode}')
+            print(f'Token ID: {display_ids!s:15} -> Raw: {raw_tokens!s:20} -> Decode Str: {current_decode}')
             token_cache = []
 
 if __name__ == '__main__':

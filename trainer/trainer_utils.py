@@ -3,20 +3,24 @@
 """
 import os
 import sys
+
 __package__ = "trainer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import ast
+import math
 import operator
 import random
 import re
-import math
+
 import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import Sampler
-from transformers import AutoTokenizer, AutoModel, AutoModelForSequenceClassification
+from transformers import AutoModel, AutoTokenizer
+
 from model.model_minimind import MiniMindForCausalLM
+
 
 # ======== 模型参数量 ========
 def get_model_params(model, config):
@@ -213,7 +217,7 @@ def safe_math_eval(expression):
         if isinstance(node, ast.Call) and not node.keywords: return funcs[resolve(node.func)](*map(walk, node.args))
         raise ValueError(f'不支持的表达式语法: {type(node).__name__}')
     consts = {'pi': math.pi, 'e': math.e, 'tau': math.tau}
-    funcs = {'pow': pow_guard, **{n: getattr(math, n) for n in 'sqrt exp log log2 log10 sin cos tan asin acos atan atan2 sinh cosh tanh floor ceil trunc fabs fmod hypot gcd degrees radians'.split()}}
+    funcs = {'pow': pow_guard, **{n: getattr(math, n) for n in ['sqrt', 'exp', 'log', 'log2', 'log10', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'sinh', 'cosh', 'tanh', 'floor', 'ceil', 'trunc', 'fabs', 'fmod', 'hypot', 'gcd', 'degrees', 'radians']}}
     bin_ops = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: pow_guard}
     unary_ops = {ast.UAdd: operator.pos, ast.USub: operator.neg}
     chars = str.maketrans({'^': '**', '×': '*', '÷': '/', '−': '-', '²': '**2', '³': '**3', '（': '(', '）': ')'})

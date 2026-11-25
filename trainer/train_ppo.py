@@ -4,24 +4,37 @@ import sys
 __package__ = "trainer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
 import argparse
 import math
 import re
 import warnings
+from contextlib import nullcontext
+
+import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from contextlib import nullcontext
-from torch import optim, nn
+from torch import nn, optim
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader, DistributedSampler
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from model.model_minimind import MiniMindConfig, MiniMindForCausalLM
+from torch.utils.data import DataLoader, DistributedSampler
+
 from dataset.lm_dataset import RLAIFDataset
-from trainer.trainer_utils import Logger, is_main_process, lm_checkpoint, init_distributed_mode, setup_seed, SkipBatchSampler, init_model, LMForRewardModel, rep_penalty, resolve_dtype
+from model.model_minimind import MiniMindConfig, MiniMindForCausalLM
 from trainer.rollout_engine import create_rollout_engine
+from trainer.trainer_utils import (
+    LMForRewardModel,
+    Logger,
+    SkipBatchSampler,
+    init_distributed_mode,
+    init_model,
+    is_main_process,
+    lm_checkpoint,
+    rep_penalty,
+    resolve_dtype,
+    setup_seed,
+)
 
 warnings.filterwarnings('ignore')
 
