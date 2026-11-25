@@ -22,7 +22,7 @@ from trainer.trainer_utils import get_lr, Logger, is_main_process, lm_checkpoint
 warnings.filterwarnings('ignore')
 
 
-def train_epoch(epoch, loader, iters, lora_params, start_step=0, wandb=None):
+def train_epoch(epoch, loader, iters, lora_params, start_step=0):
     start_time = time.time()
     for step, (input_ids, labels) in enumerate(loader, start=start_step + 1):
         input_ids = input_ids.to(args.device)
@@ -53,7 +53,6 @@ def train_epoch(epoch, loader, iters, lora_params, start_step=0, wandb=None):
             current_lr = optimizer.param_groups[-1]['lr']
             eta_min = spend_time / max(step - start_step, 1) * (iters - step) // 60
             Logger(f'Epoch:[{epoch + 1}/{args.epochs}]({step}/{iters}), loss: {current_loss:.4f}, logits_loss: {current_logits_loss:.4f}, aux_loss: {current_aux_loss:.4f}, lr: {current_lr:.8f}, epoch_time: {eta_min:.1f}min')
-            if wandb: wandb.log({"loss": current_loss, "logits_loss": current_logits_loss, "aux_loss": current_aux_loss, "learning_rate": current_lr, "epoch_time": eta_min})
 
         if (step % args.save_interval == 0 or step == iters) and is_main_process():
             model.eval()
@@ -61,7 +60,7 @@ def train_epoch(epoch, loader, iters, lora_params, start_step=0, wandb=None):
             lora_save_path = f'{args.save_dir}/{args.lora_name}_{lm_config.hidden_size}{moe_suffix}.pth'
             # LoRA只保存LoRA权重
             save_lora(model, lora_save_path)
-            lm_checkpoint(lm_config, weight=args.lora_name, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, wandb=wandb, save_dir='../checkpoints')
+            lm_checkpoint(lm_config, weight=args.lora_name, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, save_dir='../checkpoints')
             model.train()
 
         del input_ids, labels, res, loss
@@ -90,8 +89,6 @@ if __name__ == "__main__":
     parser.add_argument("--data_path", type=str, default="../dataset/lora_medical.jsonl", help="LoRA训练数据路径")
     parser.add_argument('--from_weight', default='full_sft', type=str, help="基于哪个权重训练，默认full_sft")
     parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
-    parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
-    parser.add_argument("--wandb_project", type=str, default="MiniMind-LoRA", help="wandb项目名")
     parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）")
     args = parser.parse_args()
 
@@ -111,16 +108,7 @@ if __name__ == "__main__":
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
     
-    # ========== 4. 配wandb ==========
-    wandb = None
-    if args.use_wandb and is_main_process():
-        import swanlab as wandb
-        wandb_id = ckp_data.get('wandb_id') if ckp_data else None
-        resume = 'must' if wandb_id else None
-        wandb_run_name = f"MiniMind-LoRA-{args.lora_name}-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LR-{args.learning_rate}"
-        wandb.init(project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume)
-    
-    # ========== 5. 定义模型、应用LoRA、冻结非LoRA参数 ==========
+    # ========== 4. 定义模型、应用LoRA、冻结非LoRA参数 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
     apply_lora(model, rank=args.lora_rank, lora_alpha=args.lora_alpha)
     
@@ -140,13 +128,13 @@ if __name__ == "__main__":
         else:
             param.requires_grad = False
     
-    # ========== 6. 定义数据和优化器 ==========
+    # ========== 5. 定义数据和优化器 ==========
     train_ds = SFTDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == 'float16'))
     optimizer = optim.AdamW(lora_params, lr=args.learning_rate)
     
-    # ========== 7. 从ckp恢复状态 ==========
+    # ========== 6. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0
     if ckp_data:
         model.load_state_dict(ckp_data['model'], strict=False)
@@ -155,14 +143,14 @@ if __name__ == "__main__":
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
     
-    # ========== 8. 编译和分布式包装 ==========
+    # ========== 7. 编译和分布式包装 ==========
     if args.use_compile == 1:
         args.use_compile = 0
         Logger('[LoRA] monkey-patch forward 与 torch.compile 不兼容，use_compile 已自动关闭')
     if dist.is_initialized():
         model = DistributedDataParallel(model, device_ids=[local_rank])
     
-    # ========== 9. 开始训练 ==========
+    # ========== 8. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
         setup_seed(42 + epoch); indices = torch.randperm(len(train_ds)).tolist()
@@ -171,11 +159,11 @@ if __name__ == "__main__":
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
         if skip > 0: 
             Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
-            train_epoch(epoch, loader, len(loader) + skip, lora_params, start_step, wandb)
+            train_epoch(epoch, loader, len(loader) + skip, lora_params, start_step)
         else:
-            train_epoch(epoch, loader, len(loader), lora_params, 0, wandb)
+            train_epoch(epoch, loader, len(loader), lora_params, 0)
     
-    # ========== 10. 清理分布进程 ==========
+    # ========== 9. 清理分布进程 ==========
     if dist.is_initialized():
         dist.barrier()
         dist.destroy_process_group()

@@ -27,8 +27,6 @@
 
 <div align="center">
 
-中文 | [English](./README_en.md)
-
 </div>
 
 * 此开源项目旨在完全从 0 开始，仅用 3 块钱成本与 2 小时训练时间，即可训练出规模约为 64M 的超小语言模型 MiniMind。
@@ -123,7 +121,7 @@ MiniMind 以 Apache 2.0 协议完全开源、永久免费。赞助完全自愿�
 - 提供全阶段开源数据，覆盖收集、蒸馏、清洗与去重后的高质量数据集。
 - 关键训练算法与核心模块均从 0 实现，不依赖第三方框架封装。
 - 兼容 `transformers`、`trl`、`peft` 等主流框架，以及 `llama.cpp`、`vllm`、`ollama` 等常用推理引擎与 `Llama-Factory` 等训练框架。
-- 支持单机单卡与单机多卡（DDP、DeepSpeed）训练，支持 wandb / swanlab 可视化与动态启停训练。
+- 支持单机单卡与单机多卡（DDP、DeepSpeed）训练，支持动态启停训练。
 - 支持在 C-Eval、C-MMLU、OpenBookQA 等第三方测评集上进行评测，并支持通过 YaRN 实现 RoPE 长文本外推。
 - 提供兼容 OpenAI API 协议的极简服务端，便于接入 FastGPT、Open-WebUI 等第三方 Chat UI，并支持 `reasoning_content`、`tool_calls`、`open_thinking`。
 - 提供基于 Streamlit 的极简聊天 WebUI，支持思考展示、工具选择与多轮 Tool Call。
@@ -168,13 +166,12 @@ MiniMind 以 Apache 2.0 协议完全开源、永久免费。赞助完全自愿�
 <summary> <b>2025-10-24</b> </summary>
 
 - 🔥 新增RLAIF训练算法：PPO、GRPO、SPO（从0原生实现）
-- 新增断点续训功能：支持训练自动恢复、跨GPU数量恢复、wandb记录连续性
+- 新增断点续训功能：支持训练自动恢复、跨GPU数量恢复
 - 新增RLAIF数据集：rlaif-mini.jsonl（从SFT数据随机采样1万条）；简化DPO数据集，加入中文数据
 - 新增YaRN算法：支持RoPE长文本外推，提升长序列处理能力
 - Adaptive Thinking：Reason模型可选是否启用思考链
 - chat_template全面支持Tool Calling和Reasoning标签（`<tool_call>`、`<think>`等）
 - 新增RLAIF完整章节、训练曲线对比、算法原理折叠说明
-- [SwanLab](https://swanlab.cn/)替代WandB（国内访问友好，API完全兼容）
 - 规范化所有代码 & 修复一些已知bugs
 
 </details>
@@ -343,7 +340,6 @@ python train_full_sft.py --from_resume 1
 - 训练过程会自动在 `./checkpoints/` 目录保存完整检查点（模型、优化器、训练进度等）
 - 检查点文件命名：`<权重名>_<维度>_resume.pth`（如：`full_sft_512_resume.pth`）
 - 支持跨不同 GPU 数量恢复（自动调整 step）
-- 支持 wandb 训练记录连续性（自动恢复同一个 run）
 
 > 适合长时间训练或不稳定环境，无需担心训练中断导致进度丢失
 
@@ -385,13 +381,6 @@ python eval_llm.py --weight full_sft
 ```bash
 torchrun --nproc_per_node N train_xxx.py
 ```
-
-3、可根据需要开启 wandb 记录训练过程。
-
-```bash
-... train_xxx.py --use_wandb
-```
-`2025` 年 `6` 月后，国内网络环境通常无法直连 WandB。MiniMind 当前默认转为使用 [SwanLab](https://swanlab.cn/) 作为训练可视化工具，其接口与 WandB 基本兼容；通常只需将 `import wandb` 替换为 `import swanlab as wandb`，其余调用方式基本无需改动。
 
 </details>
 
@@ -1251,7 +1240,7 @@ python train_agent.py
 # 需先启动sglang server：
 python -m sglang.launch_server --model-path ./minimind-3 --attention-backend triton --host 0.0.0.0 --port 8998
 # 训练参数可参考：
-python train_agent.py --rollout_engine sglang --sglang_base_url http://localhost:8998 --sglang_shared_path ./ckpt_mm --data_path ../dataset/agent_rl_math.jsonl --use_wandb
+python train_agent.py --rollout_engine sglang --sglang_base_url http://localhost:8998 --sglang_shared_path ./ckpt_mm --data_path ../dataset/agent_rl_math.jsonl
 ```
 
 > 训练后的模型权重文件默认每隔`save_interval步`保存为: `agent_*.pth`

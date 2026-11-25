@@ -237,7 +237,7 @@ def calculate_rewards(prompts, completions, gt_batch, tools_batch, num_gen, rewa
     return rewards
 
 # ================================ 工具与 Reward = End ================================
-def rl_train_epoch(epoch, loader, iters, rollout_engine, ref_model, reward_model=None, start_step=0, wandb=None, use_sglang=False):
+def rl_train_epoch(epoch, loader, iters, rollout_engine, ref_model, reward_model=None, start_step=0, use_sglang=False):
     for step, batch in enumerate(loader, start=start_step + 1):
         messages_batch = batch['messages']
         tools_batch = batch['tools']
@@ -340,8 +340,6 @@ def rl_train_epoch(epoch, loader, iters, rollout_engine, ref_model, reward_model
             am, ast = advantages.mean().item(), advantages.std().item()
             lr = optimizer.param_groups[0]['lr']
             Logger(f'Epoch:[{epoch+1}/{args.epochs}]({step}/{iters}), Reward:{ar:.4f}, KL:{kl:.4f}, GrpStd:{gs:.4f}, AdvStd:{ast:.4f}, Loss:{pl:.4f}, AvgLen:{al:.2f}, AdvMean:{am:.4f}, LR:{lr:.8f}')
-            if wandb and is_main_process():
-                wandb.log({"reward":ar,"kl_ref":kl,"group_reward_std":gs,"advantages_std":ast,"policy_loss":pl,"avg_response_len":al,"advantages_mean":am,"learning_rate":lr})
 
         if (step % args.save_interval == 0 or step == iters) and is_main_process():
             model.eval()
@@ -352,7 +350,7 @@ def rl_train_epoch(epoch, loader, iters, rollout_engine, ref_model, reward_model
             state_dict = raw_model.state_dict()
             torch.save({k: v.half().cpu() for k, v in state_dict.items()}, ckp)
             lm_checkpoint(lm_config, weight=args.save_weight, model=model, optimizer=optimizer,
-                         epoch=epoch, step=step, wandb=wandb, save_dir='../checkpoints', scheduler=scheduler)
+                         epoch=epoch, step=step, save_dir='../checkpoints', scheduler=scheduler)
             model.train()
             del state_dict
 
@@ -390,8 +388,6 @@ if __name__ == "__main__":
     parser.add_argument("--epsilon_high", type=float, default=5.0, help="epsilon上界")
     parser.add_argument('--from_weight', default='full_sft', type=str, help="加载预训练权重名称")
     parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否从checkpoint恢复")
-    parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb记录")
-    parser.add_argument("--wandb_project", type=str, default="MiniMind-Agent-RL", help="wandb项目名称")
     parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile")
     parser.add_argument("--debug_mode", action="store_true", help="调试模式")
     parser.add_argument("--debug_interval", type=int, default=20, help="调试日志间隔")
@@ -416,13 +412,6 @@ if __name__ == "__main__":
     args.dtype = resolve_dtype(args.dtype, args.device)
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
-
-    wandb = None
-    if args.use_wandb and is_main_process():
-        import swanlab as wandb
-        wandb_id = ckp_data.get('wandb_id') if ckp_data else None
-        resume = 'must' if wandb_id else None
-        wandb.init(project=args.wandb_project, name=f"Agent-RL-E{args.epochs}-B{args.batch_size}-LR{args.learning_rate}", id=wandb_id, resume=resume)
 
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
 
@@ -475,9 +464,9 @@ if __name__ == "__main__":
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True, collate_fn=collate_fn)
         if skip > 0:
             Logger(f'Epoch [{epoch+1}/{args.epochs}]: skip {start_step} steps')
-            rl_train_epoch(epoch, loader, len(loader) + skip, rollout_engine, ref_model, reward_model, start_step, wandb, use_sglang = (args.rollout_engine == "sglang"))
+            rl_train_epoch(epoch, loader, len(loader) + skip, rollout_engine, ref_model, reward_model, start_step, use_sglang = (args.rollout_engine == "sglang"))
         else:
-            rl_train_epoch(epoch, loader, len(loader), rollout_engine, ref_model, reward_model, 0, wandb, use_sglang = (args.rollout_engine == "sglang"))
+            rl_train_epoch(epoch, loader, len(loader), rollout_engine, ref_model, reward_model, 0, use_sglang = (args.rollout_engine == "sglang"))
 
     if dist.is_initialized():
         dist.barrier()

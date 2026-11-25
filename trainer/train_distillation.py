@@ -38,7 +38,7 @@ def distillation_loss(student_logits, teacher_logits, temperature=1.0, reduction
     return (temperature ** 2) * kl
 
 
-def train_epoch(epoch, loader, iters, teacher_model, lm_config_student, start_step=0, wandb=None, alpha=0.0, temperature=1.0):
+def train_epoch(epoch, loader, iters, teacher_model, lm_config_student, start_step=0, alpha=0.0, temperature=1.0):
     start_time = time.time()
     
     if teacher_model is not None:
@@ -111,16 +111,6 @@ def train_epoch(epoch, loader, iters, teacher_model, lm_config_student, start_st
             
             Logger(f'Epoch:[{epoch + 1}/{args.epochs}]({step}/{iters}), loss: {current_loss:.4f}, ce: {current_ce_loss:.4f}, aux_loss: {current_aux_loss:.4f}, distill: {distill_loss.item():.4f}, learning_rate: {current_lr:.8f}, epoch_time: {eta_min:.3f}min')
             
-            if wandb:
-                wandb.log({
-                    "loss": current_loss,
-                    "ce_loss": current_ce_loss,
-                    "aux_loss": current_aux_loss,
-                    "distill_loss": distill_loss.item() if teacher_model is not None else 0.0,
-                    "learning_rate": current_lr,
-                    "epoch_time": eta_min
-                })
-
         if (step % args.save_interval == 0 or step == iters) and is_main_process():
             model.eval()
             moe_suffix = '_moe' if lm_config_student.use_moe else ''
@@ -129,7 +119,7 @@ def train_epoch(epoch, loader, iters, teacher_model, lm_config_student, start_st
             raw_model = getattr(raw_model, '_orig_mod', raw_model)
             state_dict = raw_model.state_dict()
             torch.save({k: v.half().cpu() for k, v in state_dict.items()}, ckp)
-            lm_checkpoint(lm_config_student, weight=args.save_weight, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, wandb=wandb, save_dir='../checkpoints')
+            lm_checkpoint(lm_config_student, weight=args.save_weight, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, save_dir='../checkpoints')
             model.train()
             del state_dict
 
@@ -165,8 +155,6 @@ if __name__ == "__main__":
     parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
     parser.add_argument('--alpha', default=0.5, type=float, help="CE损失权重，总损失=alpha*CE+(1-alpha)*KL")
     parser.add_argument('--temperature', default=1.5, type=float, help="蒸馏温度（推荐范围1.0-2.0）")
-    parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
-    parser.add_argument("--wandb_project", type=str, default="MiniMind-Distillation", help="wandb项目名")
     parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）")
     args = parser.parse_args()
 
@@ -187,16 +175,7 @@ if __name__ == "__main__":
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
     
-    # ========== 4. 配wandb ==========
-    wandb = None
-    if args.use_wandb and is_main_process():
-        import swanlab as wandb
-        wandb_id = ckp_data.get('wandb_id') if ckp_data else None
-        resume = 'must' if wandb_id else None
-        wandb_run_name = f"MiniMind-Distill-S{args.student_hidden_size}T{args.teacher_hidden_size}-Epoch-{args.epochs}-BS-{args.batch_size}-LR-{args.learning_rate}"
-        wandb.init(project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume)
-    
-    # ========== 5. 定义学生和教师模型 ==========
+    # ========== 4. 定义学生和教师模型 ==========
     model, tokenizer = init_model(lm_config_student, args.from_student_weight, device=args.device)
     Logger(f'学生模型总参数量：{sum(p.numel() for p in model.parameters()) / 1e6:.3f} M')
     teacher_model, _ = init_model(lm_config_teacher, args.from_teacher_weight, device=args.device)
@@ -208,7 +187,7 @@ if __name__ == "__main__":
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == 'float16'))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
     
-    # ========== 6. 从ckp恢复状态 ==========
+    # ========== 5. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0
     if ckp_data:
         model.load_state_dict(ckp_data['model'])
@@ -217,14 +196,14 @@ if __name__ == "__main__":
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
     
-    # ========== 7. 编译和分布式包装 ==========
+    # ========== 6. 编译和分布式包装 ==========
     if args.use_compile == 1:
         model = torch.compile(model)
         Logger('torch.compile enabled')
     if dist.is_initialized():
         model = DistributedDataParallel(model, device_ids=[local_rank])
     
-    # ========== 8. 开始训练 ==========
+    # ========== 7. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
         setup_seed(42 + epoch); indices = torch.randperm(len(train_ds)).tolist()
@@ -233,11 +212,11 @@ if __name__ == "__main__":
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
         if skip > 0: 
             Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
-            train_epoch(epoch, loader, len(loader) + skip, teacher_model, lm_config_student, start_step, wandb, args.alpha, args.temperature)
+            train_epoch(epoch, loader, len(loader) + skip, teacher_model, lm_config_student, start_step, args.alpha, args.temperature)
         else:
-            train_epoch(epoch, loader, len(loader), teacher_model, lm_config_student, 0, wandb, args.alpha, args.temperature)
+            train_epoch(epoch, loader, len(loader), teacher_model, lm_config_student, 0, args.alpha, args.temperature)
     
-    # ========== 9. 清理分布进程 ==========
+    # ========== 8. 清理分布进程 ==========
     if dist.is_initialized():
         dist.barrier()
         dist.destroy_process_group()

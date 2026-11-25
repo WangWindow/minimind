@@ -1,0 +1,36 @@
+[project]
+name = "minimind"
+version = "0.1.0"
+description = "MiniMind: train a small language model from scratch"
+requires-python = ">=3.14"
+dependencies = [
+    # deep learning / model
+    "torch>=2.15",
+    "transformers>=5",
+    "tokenizers>=0.23",
+    "datasets>=5",
+    "numpy>=2",
+    "pyarrow>=25,<26",
+    # training utilities
+    "psutil>=7",
+    # inference / API serving
+    "fastapi>=0.165",
+    "uvicorn>=0.54",
+    "pydantic>=2.14",
+    # evaluation / rollout
+    "openai>=3.59",
+    "requests>=2.34",
+    # model & dataset download
+    "modelscope>=1.40",
+]
+
+[tool.uv.sources]
+# Use the CUDA 13.2 build of PyTorch on Linux/Windows; fall back to PyPI (CPU/MPS) elsewhere.
+torch = [
+    { index = "pytorch-cu132", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true

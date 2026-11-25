@@ -50,7 +50,7 @@ def dpo_loss(ref_log_probs, policy_log_probs, mask, beta):
     return loss.mean()
 
 
-def train_epoch(epoch, loader, iters, ref_model, lm_config, start_step=0, wandb=None, beta=0.1):
+def train_epoch(epoch, loader, iters, ref_model, lm_config, start_step=0, beta=0.1):
     start_time = time.time()
 
     for step, batch in enumerate(loader, start=start_step + 1):
@@ -101,7 +101,6 @@ def train_epoch(epoch, loader, iters, ref_model, lm_config, start_step=0, wandb=
             
             Logger(f'Epoch:[{epoch + 1}/{args.epochs}]({step}/{iters}), loss: {current_loss:.4f}, dpo_loss: {current_dpo_loss:.4f}, aux_loss: {current_aux_loss:.4f}, learning_rate: {current_lr:.8f}, epoch_time: {eta_min:.3f}min')
             
-            if wandb: wandb.log({"loss": current_loss, "dpo_loss": current_dpo_loss, "aux_loss": current_aux_loss, "learning_rate": current_lr, "epoch_time": eta_min})
 
         if (step % args.save_interval == 0 or step == iters) and is_main_process():
             model.eval()
@@ -111,7 +110,7 @@ def train_epoch(epoch, loader, iters, ref_model, lm_config, start_step=0, wandb=
             raw_model = getattr(raw_model, '_orig_mod', raw_model)
             state_dict = raw_model.state_dict()
             torch.save({k: v.half().cpu() for k, v in state_dict.items()}, ckp)
-            lm_checkpoint(lm_config, weight=args.save_weight, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, wandb=wandb, save_dir='../checkpoints')
+            lm_checkpoint(lm_config, weight=args.save_weight, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, save_dir='../checkpoints')
             model.train()
             del state_dict
 
@@ -142,8 +141,6 @@ if __name__ == "__main__":
     parser.add_argument('--from_weight', default='full_sft', type=str, help="基于哪个权重训练")
     parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
     parser.add_argument('--beta', default=0.15, type=float, help="DPO中的beta参数")
-    parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
-    parser.add_argument("--wandb_project", type=str, default="MiniMind-DPO", help="wandb项目名")
     parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）")
     args = parser.parse_args()
 
@@ -163,16 +160,7 @@ if __name__ == "__main__":
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
     
-    # ========== 4. 配wandb ==========
-    wandb = None
-    if args.use_wandb and is_main_process():
-        import swanlab as wandb
-        wandb_id = ckp_data.get('wandb_id') if ckp_data else None
-        resume = 'must' if wandb_id else None
-        wandb_run_name = f"MiniMind-DPO-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LR-{args.learning_rate}"
-        wandb.init(project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume)
-    
-    # ========== 5. 定义模型和参考模型 ==========
+    # ========== 4. 定义模型和参考模型 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
     Logger(f'策略模型总参数量：{sum(p.numel() for p in model.parameters()) / 1e6:.3f} M')
     # 初始化参考模型（ref_model冻结）
@@ -186,7 +174,7 @@ if __name__ == "__main__":
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == 'float16'))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
     
-    # ========== 6. 从ckp恢复状态 ==========
+    # ========== 5. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0
     if ckp_data:
         model.load_state_dict(ckp_data['model'])
@@ -195,14 +183,14 @@ if __name__ == "__main__":
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
     
-    # ========== 7. 编译和分布式包装 ==========
+    # ========== 6. 编译和分布式包装 ==========
     if args.use_compile == 1:
         model = torch.compile(model)
         Logger('torch.compile enabled')
     if dist.is_initialized():
         model = DistributedDataParallel(model, device_ids=[local_rank])
     
-    # ========== 8. 开始训练 ==========
+    # ========== 7. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
         setup_seed(42 + epoch); indices = torch.randperm(len(train_ds)).tolist()
@@ -211,11 +199,11 @@ if __name__ == "__main__":
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
         if skip > 0: 
             Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
-            train_epoch(epoch, loader, len(loader) + skip, ref_model, lm_config, start_step, wandb, args.beta)
+            train_epoch(epoch, loader, len(loader) + skip, ref_model, lm_config, start_step, args.beta)
         else:
-            train_epoch(epoch, loader, len(loader), ref_model, lm_config, 0, wandb, args.beta)
+            train_epoch(epoch, loader, len(loader), ref_model, lm_config, 0, args.beta)
     
-    # ========== 9. 清理分布进程 ==========
+    # ========== 8. 清理分布进程 ==========
     if dist.is_initialized():
         dist.barrier()
         dist.destroy_process_group()

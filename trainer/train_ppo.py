@@ -69,7 +69,7 @@ def calculate_rewards(prompts, responses, reward_model):
     return rewards
 
 
-def ppo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, actor_scheduler, critic_scheduler, reward_model, start_step=0, wandb=None):
+def ppo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, actor_scheduler, critic_scheduler, reward_model, start_step=0):
     actor_model.train()
     critic_model.train()
     grad_accum_step = 0
@@ -258,18 +258,6 @@ def ppo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, actor_sched
             avg_len_val = resp_lengths.float().mean().item()
             actor_lr, critic_lr = actor_optimizer.param_groups[0]['lr'], critic_optimizer.param_groups[0]['lr']
 
-            if wandb is not None:
-                wandb.log({
-                    "reward": reward_val,
-                    "kl_ref": kl_ref_val,
-                    "approx_kl": approx_kl_val,
-                    "clipfrac": clipfrac_val,
-                    "critic_loss": critic_loss_val,
-                    "avg_response_len": avg_len_val,
-                    "actor_lr": actor_lr,
-                    "critic_lr": critic_lr,
-                })
-
             Logger(f"Epoch:[{epoch + 1}/{args.epochs}]({step}/{iters}), "
                    f"Reward: {reward_val:.4f}, KL_ref: {kl_ref_val:.4f}, Approx KL: {approx_kl_val:.4f}, "
                    f"ClipFrac: {clipfrac_val:.4f}, Critic Loss: {critic_loss_val:.4f}, "
@@ -286,7 +274,7 @@ def ppo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, actor_sched
             
             # 使用 lm_checkpoint 保存完整状态（包括 critic）
             lm_checkpoint(lm_config, weight=args.save_weight, model=actor_model, optimizer=actor_optimizer, 
-                         epoch=epoch, step=step, wandb=wandb, save_dir='../checkpoints',
+                         epoch=epoch, step=step, save_dir='../checkpoints',
                          scheduler=actor_scheduler, critic_model=critic_model, 
                          critic_optimizer=critic_optimizer, critic_scheduler=critic_scheduler)
             actor_model.train()
@@ -330,8 +318,6 @@ if __name__ == "__main__":
     parser.add_argument('--from_weight', default='full_sft', type=str, help="基于哪个权重训练")
     parser.add_argument("--reward_model_path", type=str, default="../../internlm2-1_8b-reward", help="Reward模型路径")
     parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
-    parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
-    parser.add_argument("--wandb_project", type=str, default="MiniMind-PPO", help="wandb项目名")
     parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）")
     parser.add_argument("--debug_mode", action="store_true", help="是否打印训练调试采样")
     parser.add_argument("--debug_interval", type=int, default=20, help="debug模式下每隔多少step打印一次采样")
@@ -359,16 +345,7 @@ if __name__ == "__main__":
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
     
-    # ========== 4. 配wandb ==========
-    wandb = None
-    if args.use_wandb and is_main_process():
-        import swanlab as wandb
-        wandb_id = ckp_data.get('wandb_id') if ckp_data else None
-        resume = 'must' if wandb_id else None
-        wandb_run_name = f"MiniMind-PPO-Epoch-{args.epochs}-BS-{args.batch_size}-LR-{args.learning_rate}"
-        wandb.init(project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume)
-    
-    # ========== 5. 初始化模型和数据 ==========
+    # ========== 4. 初始化模型和数据 ==========
     base_weight = args.from_weight
     # Actor模型
     actor_model, tokenizer = init_model(lm_config, base_weight, device=args.device)
@@ -414,7 +391,7 @@ if __name__ == "__main__":
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
     
-    # ========== 7. 编译和分布式包装 ==========
+    # ========== 5. 编译和分布式包装 ==========
     if args.use_compile == 1:
         actor_model = torch.compile(actor_model)
         Logger('torch.compile enabled')
@@ -424,7 +401,7 @@ if __name__ == "__main__":
         critic_model = DistributedDataParallel(critic_model, device_ids=[local_rank], broadcast_buffers=False)
     rollout_engine.update_policy(actor_model)
     
-    # ========== 8. 开始训练 ==========
+    # ========== 6. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
         setup_seed(42 + epoch); indices = torch.randperm(len(train_ds)).tolist()
@@ -433,11 +410,11 @@ if __name__ == "__main__":
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
         if skip > 0: 
             Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
-            ppo_train_epoch(epoch, loader, len(loader) + skip, rollout_engine, ref_model, actor_scheduler, critic_scheduler, reward_model, start_step, wandb)
+            ppo_train_epoch(epoch, loader, len(loader) + skip, rollout_engine, ref_model, actor_scheduler, critic_scheduler, reward_model, start_step)
         else:
-            ppo_train_epoch(epoch, loader, len(loader), rollout_engine, ref_model, actor_scheduler, critic_scheduler, reward_model, 0, wandb)
+            ppo_train_epoch(epoch, loader, len(loader), rollout_engine, ref_model, actor_scheduler, critic_scheduler, reward_model, 0)
     
-    # ========== 9. 清理分布进程 ==========
+    # ========== 7. 清理分布进程 ==========
     if dist.is_initialized():
         dist.barrier()
         dist.destroy_process_group()
