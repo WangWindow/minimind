@@ -5,7 +5,7 @@ import os
 
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 
-DATA_PATH = '../dataset/sft_t2t_mini.jsonl'
+DATA_PATH = '../data/sft_t2t_mini.jsonl'
 TOKENIZER_DIR = '../model_learn_tokenizer/'
 VOCAB_SIZE = 6400
 SPECIAL_TOKENS_NUM = 36
@@ -46,14 +46,14 @@ def get_texts(data_path, max_lines=MAX_LINES):
 def train_tokenizer(data_path, tokenizer_dir, vocab_size, special_tokens_num=SPECIAL_TOKENS_NUM):
     tokenizer = Tokenizer(models.BPE())
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
-    
+
     special_tokens_list = [
-        "<|endoftext|>", "<|im_start|>", "<|im_end|>", 
-        "<|object_ref_start|>", "<|object_ref_end|>", "<|box_start|>", "<|box_end|>", "<|quad_start|>", "<|quad_end|>", 
-        "<|vision_start|>", "<|vision_end|>", "<|vision_pad|>", "<|image_pad|>", "<|video_pad|>", 
+        "<|endoftext|>", "<|im_start|>", "<|im_end|>",
+        "<|object_ref_start|>", "<|object_ref_end|>", "<|box_start|>", "<|box_end|>", "<|quad_start|>", "<|quad_end|>",
+        "<|vision_start|>", "<|vision_end|>", "<|vision_pad|>", "<|image_pad|>", "<|video_pad|>",
         "<|audio_start|>", "<|audio_end|>", "<|audio_pad|>", "<tts_pad>", "<tts_text_bos>", "<tts_text_eod>", "<tts_text_bos_single>"
     ]
-    
+
     additional_tokens_list = [
         "<tool_call>", "</tool_call>",
         "<tool_response>", "</tool_response>",
@@ -84,7 +84,7 @@ def train_tokenizer(data_path, tokenizer_dir, vocab_size, special_tokens_num=SPE
             token_info['special'] = False
     with open(tokenizer_json_path, 'w', encoding='utf-8') as f:
         json.dump(tokenizer_data, f, ensure_ascii=False, indent=2)
-    
+
     added_tokens_decoder = {}
     for i, token in enumerate(all_special_tokens):
         idx = tokenizer.token_to_id(token)
@@ -161,7 +161,7 @@ def eval_tokenizer(tokenizer_dir):
         # 混合样本
         "Python 是一种高级编程语言，以其简洁的语法和强大的生态系统而闻名。It is widely used in data science, machine learning, and web development. 开发者可以利用 NumPy, Pandas, and PyTorch 等库快速构建复杂的应用。学习 Python 的过程非常愉快，因为它的代码读起来就像英语一样。Whether you are a beginner or an expert, Python offers something for everyone.",
     ]
-    
+
     total_compression = 0
     for i, text in enumerate(test_texts):
         encoded = tokenizer.encode(text)
@@ -170,7 +170,7 @@ def eval_tokenizer(tokenizer_dir):
         compression_ratio = char_count / token_count
         total_compression += compression_ratio
         print(f"样本 {i+1} | 字符数: {char_count:4} | Tokens: {token_count:3} | 压缩率: {compression_ratio:.2f}")
-    
+
     print(f"平均压缩率: {total_compression / len(test_texts):.2f}")
     print('-'*100)
     print('流式解码（字节缓冲）测试：')

@@ -9,7 +9,6 @@ import time
 import warnings
 from contextlib import nullcontext
 
-import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
 import torch
 import torch.distributed as dist
 from torch import optim
@@ -102,7 +101,7 @@ if __name__ == "__main__":
     parser.add_argument('--max_seq_len', default=340, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）")
     parser.add_argument('--use_moe', default=0, type=int, choices=[0, 1], help="是否使用MoE架构（0=否，1=是）")
     parser.add_argument('--seed', default=42, type=int, help="随机种子（DDP下每个rank为seed+rank，每轮为seed+epoch）")
-    parser.add_argument("--data_path", type=str, default="../dataset/pretrain_t2t_mini.jsonl", help="预训练数据路径")
+    parser.add_argument("--data_path", type=str, default="../data/pretrain_t2t_mini.jsonl", help="预训练数据路径")
     parser.add_argument('--from_weight', default='none', type=str, help="基于哪个权重训练，为none则从头开始")
     parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
     parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）")
@@ -112,25 +111,25 @@ if __name__ == "__main__":
     local_rank = init_distributed_mode()
     if dist.is_initialized(): args.device = f"cuda:{local_rank}"
     setup_seed(args.seed + (dist.get_rank() if dist.is_initialized() else 0))
-    
+
     # ========== 2. 配置目录、模型参数、检查ckp ==========
     os.makedirs(args.save_dir, exist_ok=True)
     lm_config = MiniMindConfig(hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers, use_moe=bool(args.use_moe))
     ckp_data = lm_checkpoint(lm_config, weight=args.save_weight, save_dir='../checkpoints') if args.from_resume==1 else None
-    
+
     # ========== 3. 设置混合精度 ==========
     device_type = "cuda" if torch.device(args.device).type == "cuda" else "cpu"
     args.dtype = resolve_dtype(args.dtype, args.device)
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
-    
+
     # ========== 4. 定义模型、数据、优化器 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
     train_ds = PretrainDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == 'float16'))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
-    
+
     # ========== 5. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0
     if ckp_data:
@@ -139,14 +138,14 @@ if __name__ == "__main__":
         if ckp_data.get('scaler'): scaler.load_state_dict(ckp_data['scaler'])
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
-    
+
     # ========== 6. 编译和分布式包装 ==========
     if args.use_compile == 1:
         model = torch.compile(model)
         Logger('torch.compile enabled')
     if dist.is_initialized():
         model = DistributedDataParallel(model, device_ids=[local_rank])
-    
+
     # ========== 7. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
@@ -154,12 +153,12 @@ if __name__ == "__main__":
         skip = start_step if (epoch == start_epoch and start_step > 0) else 0
         batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
-        if skip > 0: 
+        if skip > 0:
             Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
             train_epoch(epoch, loader, len(loader) + skip, start_step)
         else:
             train_epoch(epoch, loader, len(loader), 0)
-    
+
     # ========== 8. 清理分布进程 ==========
     if dist.is_initialized():
         dist.barrier()

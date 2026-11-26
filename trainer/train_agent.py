@@ -12,7 +12,6 @@ import re
 import warnings
 from contextlib import nullcontext, suppress
 
-import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F

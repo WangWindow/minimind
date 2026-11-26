@@ -10,7 +10,6 @@ import re
 import warnings
 from contextlib import nullcontext
 
-import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -138,7 +137,7 @@ def ppo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, actor_sched
             critic_for_rollout = critic_model.module if isinstance(critic_model, DistributedDataParallel) else critic_model
             values_seq = critic_for_rollout(input_ids=gen_out, attention_mask=full_mask)
             old_resp_values = values_seq.gather(1, logp_pos) * resp_value_mask
-            
+
             ref_resp_logp = F.log_softmax(ref_model(input_ids=gen_out, attention_mask=full_mask).logits[:, :-1], dim=-1).gather(2, labels.unsqueeze(-1)).squeeze(-1).gather(1, logp_pos)
             token_rewards = torch.zeros_like(old_resp_logp)
             last_idx = resp_lengths - 1  # [B]
@@ -172,7 +171,7 @@ def ppo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, actor_sched
             b_inds = torch.randperm(B, device=args.device)
             for i in range(0, B, mb_size):
                 inds = b_inds[i:i + mb_size]
-                
+
                 mb_values_seq = critic_model(input_ids=gen_out[inds], attention_mask=full_mask[inds])
                 mb_resp_values = mb_values_seq.gather(1, logp_pos[inds])
 
@@ -196,15 +195,15 @@ def ppo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, actor_sched
                                f"dropout={getattr(lm_config, 'dropout', None)} "
                                f"training={actor_model.training}")
                 approx_kl = (0.5 * (log_ratio ** 2) * resp_policy_mask[inds]).sum() / resp_policy_mask[inds].sum().clamp(min=1)
-                
+
                 # 同步各卡的 approx_kl，防止某卡 break 而其它卡继续导致 DDP 死锁
                 approx_kl_val = approx_kl.detach().clone()
                 if dist.is_initialized():
                     dist.all_reduce(approx_kl_val, op=dist.ReduceOp.AVG)
-                    
+
                 if approx_kl_val > args.early_stop_kl:
                     stop_ppo = True
-                
+
                 ratio = torch.exp(log_ratio)
                 clipfrac = ((((ratio - 1.0).abs() > args.clip_epsilon).float() * resp_policy_mask[inds]).sum()
                             / resp_policy_mask[inds].sum().clamp(min=1))
@@ -227,7 +226,7 @@ def ppo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, actor_sched
                     loss = (policy_loss + args.vf_coef * value_loss + aux_loss) * 0.0
                 else:
                     loss = (policy_loss + args.vf_coef * value_loss + aux_loss) / args.accumulation_steps
-                
+
                 loss.backward()
 
                 policy_loss_sum += policy_loss.item()
@@ -259,7 +258,7 @@ def ppo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, actor_sched
             critic_scheduler.step()
             actor_optimizer.zero_grad()
             critic_optimizer.zero_grad()
-        
+
         if step % args.save_interval == 0 or step == iters: rollout_engine.update_policy(actor_model)
 
         if is_main_process():
@@ -284,11 +283,11 @@ def ppo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, actor_sched
             raw_actor = getattr(raw_actor, '_orig_mod', raw_actor)
             actor_state = raw_actor.state_dict()
             torch.save({k: v.half().cpu() for k, v in actor_state.items()}, ckp)
-            
+
             # 使用 lm_checkpoint 保存完整状态（包括 critic）
-            lm_checkpoint(lm_config, weight=args.save_weight, model=actor_model, optimizer=actor_optimizer, 
+            lm_checkpoint(lm_config, weight=args.save_weight, model=actor_model, optimizer=actor_optimizer,
                          epoch=epoch, step=step, save_dir='../checkpoints',
-                         scheduler=actor_scheduler, critic_model=critic_model, 
+                         scheduler=actor_scheduler, critic_model=critic_model,
                          critic_optimizer=critic_optimizer, critic_scheduler=critic_scheduler)
             actor_model.train()
             del actor_state
@@ -342,18 +341,18 @@ if __name__ == "__main__":
     local_rank = init_distributed_mode()
     if dist.is_initialized(): args.device = f"cuda:{local_rank}"
     setup_seed(42 + (dist.get_rank() if dist.is_initialized() else 0))
-    
+
     # ========== 2. 配置目录、模型参数、检查ckp ==========
     os.makedirs(args.save_dir, exist_ok=True)
     lm_config = MiniMindConfig(hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers, use_moe=bool(args.use_moe))
     ckp_data = lm_checkpoint(lm_config, weight=args.save_weight, save_dir='../checkpoints') if args.from_resume==1 else None
-    
+
     # ========== 3. 设置混合精度 ==========
     device_type = "cuda" if torch.device(args.device).type == "cuda" else "cpu"
     args.dtype = resolve_dtype(args.dtype, args.device)
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
-    
+
     # ========== 4. 初始化模型和数据 ==========
     base_weight = args.from_weight
     # Actor模型
@@ -395,7 +394,7 @@ if __name__ == "__main__":
         critic_scheduler.load_state_dict(ckp_data['critic_scheduler'])
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
-    
+
     # ========== 5. 编译和分布式包装 ==========
     if args.use_compile == 1:
         actor_model = torch.compile(actor_model)
@@ -405,7 +404,7 @@ if __name__ == "__main__":
         actor_model = DistributedDataParallel(actor_model, device_ids=[local_rank], broadcast_buffers=False)
         critic_model = DistributedDataParallel(critic_model, device_ids=[local_rank], broadcast_buffers=False)
     rollout_engine.update_policy(actor_model)
-    
+
     # ========== 6. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
@@ -413,12 +412,12 @@ if __name__ == "__main__":
         skip = start_step if (epoch == start_epoch and start_step > 0) else 0
         batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
-        if skip > 0: 
+        if skip > 0:
             Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
             ppo_train_epoch(epoch, loader, len(loader) + skip, rollout_engine, ref_model, actor_scheduler, critic_scheduler, reward_model, start_step)
         else:
             ppo_train_epoch(epoch, loader, len(loader), rollout_engine, ref_model, actor_scheduler, critic_scheduler, reward_model, 0)
-    
+
     # ========== 7. 清理分布进程 ==========
     if dist.is_initialized():
         dist.barrier()

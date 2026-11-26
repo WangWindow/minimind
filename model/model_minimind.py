@@ -4,7 +4,13 @@ from typing import ClassVar
 import torch
 import torch.nn.functional as F
 from torch import nn
-from transformers import GenerationMixin, PretrainedConfig, PreTrainedModel
+from transformers import (
+    Cache,
+    DynamicCache,
+    GenerationMixin,
+    PretrainedConfig,
+    PreTrainedModel,
+)
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import MoeCausalLMOutputWithPast
 
@@ -27,26 +33,24 @@ class MiniMindConfig(PretrainedConfig):
         self.flash_attn = kwargs.get("flash_attn", True)
         self.num_attention_heads = kwargs.get("num_attention_heads", 8)
         self.num_key_value_heads = kwargs.get("num_key_value_heads", 4)
-        self.head_dim = kwargs.get(
-            "head_dim", self.hidden_size // self.num_attention_heads
-        )
+        self.head_dim = kwargs.get("head_dim", self.hidden_size // self.num_attention_heads)
         self.hidden_act = kwargs.get("hidden_act", "silu")
-        self.intermediate_size = kwargs.get(
-            "intermediate_size", math.ceil(hidden_size * math.pi / 64) * 64
-        )
+        self.intermediate_size = kwargs.get("intermediate_size", math.ceil(hidden_size * math.pi / 64) * 64)
         self.max_position_embeddings = kwargs.get("max_position_embeddings", 32768)
         self.rms_norm_eps = kwargs.get("rms_norm_eps", 1e-6)
         self.rope_theta = kwargs.get("rope_theta", 1e6)
         self.tie_word_embeddings = kwargs.get("tie_word_embeddings", True)
         self.inference_rope_scaling = kwargs.get("inference_rope_scaling", False)
-        self.rope_scaling = (
+        # transformers>=5 renamed `rope_scaling` to `rope_parameters`
+        self.rope_parameters = (
             {
+                "rope_type": "yarn",
+                "rope_theta": self.rope_theta,
                 "beta_fast": 32,
                 "beta_slow": 1,
                 "factor": 16,
                 "original_max_position_embeddings": 2048,
                 "attention_factor": 1.0,
-                "type": "yarn",
             }
             if self.inference_rope_scaling
             else None
@@ -138,19 +142,20 @@ def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
 
 
 def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
-    bs, slen, num_key_value_heads, head_dim = x.shape
+    bs, num_key_value_heads, slen, head_dim = x.shape
     if n_rep == 1:
         return x
     return (
-        x[:, :, :, None, :]
-        .expand(bs, slen, num_key_value_heads, n_rep, head_dim)
-        .reshape(bs, slen, num_key_value_heads * n_rep, head_dim)
+        x[:, :, None, :, :]
+        .expand(bs, num_key_value_heads, n_rep, slen, head_dim)
+        .reshape(bs, num_key_value_heads * n_rep, slen, head_dim)
     )
 
 
 class Attention(nn.Module):
-    def __init__(self, config: MiniMindConfig):
+    def __init__(self, config: MiniMindConfig, layer_idx: int = 0):
         super().__init__()
+        self.layer_idx = layer_idx
         self.num_key_value_heads = (
             config.num_attention_heads
             if config.num_key_value_heads is None
@@ -187,8 +192,7 @@ class Attention(nn.Module):
         self,
         x,
         position_embeddings,
-        past_key_value=None,
-        use_cache=False,
+        cache: Cache | None = None,
         attention_mask=None,
     ):
         bsz, seq_len, _ = x.shape
@@ -199,19 +203,16 @@ class Attention(nn.Module):
         xq, xk = self.q_norm(xq), self.k_norm(xk)
         cos, sin = position_embeddings
         xq, xk = apply_rotary_pos_emb(xq, xk, cos, sin)
-        if past_key_value is not None:
-            xk = torch.cat([past_key_value[0], xk], dim=1)
-            xv = torch.cat([past_key_value[1], xv], dim=1)
-        past_kv = (xk, xv) if use_cache else None
-        xq, xk, xv = (
-            xq.transpose(1, 2),
-            repeat_kv(xk, self.n_rep).transpose(1, 2),
-            repeat_kv(xv, self.n_rep).transpose(1, 2),
-        )
+        # transformers Cache stores tensors as [batch, heads, seq, head_dim]
+        xq, xk, xv = xq.transpose(1, 2), xk.transpose(1, 2), xv.transpose(1, 2)
+        has_past = cache is not None and cache.get_seq_length() > 0
+        if cache is not None:
+            xk, xv = cache.update(xk, xv, self.layer_idx)
+        xk, xv = repeat_kv(xk, self.n_rep), repeat_kv(xv, self.n_rep)
         if (
             self.flash
             and (seq_len > 1)
-            and (not self.is_causal or past_key_value is None)
+            and (not self.is_causal or not has_past)
             and (attention_mask is None or torch.all(attention_mask == 1))
         ):
             output = F.scaled_dot_product_attention(
@@ -219,7 +220,7 @@ class Attention(nn.Module):
                 xk,
                 xv,
                 dropout_p=self.dropout if self.training else 0.0,
-                is_causal=self.is_causal,
+                is_causal=self.is_causal and not has_past,
             )
         else:
             scores = (xq @ xk.transpose(-2, -1)).float() / math.sqrt(self.head_dim)
@@ -234,7 +235,7 @@ class Attention(nn.Module):
             output = self.attn_dropout(F.softmax(scores, dim=-1).type_as(xq)) @ xv
         output = output.transpose(1, 2).reshape(bsz, seq_len, -1)
         output = self.resid_dropout(self.o_proj(output))
-        return output, past_kv
+        return output
 
 
 class FeedForward(nn.Module):
@@ -272,9 +273,7 @@ class MOEFeedForward(nn.Module):
         )
         if self.config.norm_topk_prob:
             if self.config.num_experts_per_tok > 1:
-                topk_weight = topk_weight / (
-                    topk_weight.sum(dim=-1, keepdim=True) + 1e-20
-                )
+                topk_weight = topk_weight / (topk_weight.sum(dim=-1, keepdim=True) + 1e-20)
             else:
                 top1 = torch.topk(
                     F.softmax(self.gate(x_flat.detach()), dim=-1),
@@ -282,18 +281,14 @@ class MOEFeedForward(nn.Module):
                     dim=-1,
                     sorted=False,
                 )[0]
-                topk_weight = (
-                    top1 - top1.detach() + 1.0
-                )  # k=1: 1.0 forward on purpose, gradient via straight-through
+                topk_weight = (top1 - top1.detach() + 1.0)  # k=1: 1.0 forward on purpose, gradient via straight-through
         y = torch.zeros_like(x_flat)
         for i, expert in enumerate(self.experts):
             mask = topk_idx == i
             if mask.any():
                 token_idx = mask.any(dim=-1).nonzero().flatten()
                 weight = topk_weight[mask].view(-1, 1)
-                y.index_add_(
-                    0, token_idx, (expert(x_flat[token_idx]) * weight).to(y.dtype)
-                )
+                y.index_add_(0, token_idx, (expert(x_flat[token_idx]) * weight).to(y.dtype))
             elif self.training:
                 y[0, 0] += 0 * sum(p.sum() for p in expert.parameters())
         if self.training and self.config.router_aux_loss_coef > 0:
@@ -311,114 +306,100 @@ class MOEFeedForward(nn.Module):
 class MiniMindBlock(nn.Module):
     def __init__(self, layer_id: int, config: MiniMindConfig):
         super().__init__()
-        self.self_attn = Attention(config)
+        self.self_attn = Attention(config, layer_idx=layer_id)
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = FeedForward(config) if not config.use_moe else MOEFeedForward(config)
 
     def forward(
         self,
         hidden_states,
         position_embeddings,
-        past_key_value=None,
-        use_cache=False,
+        cache: Cache | None = None,
         attention_mask=None,
     ):
         residual = hidden_states
-        hidden_states, present_key_value = self.self_attn(
+        hidden_states = self.self_attn(
             self.input_layernorm(hidden_states),
             position_embeddings,
-            past_key_value,
-            use_cache,
+            cache,
             attention_mask,
         )
         hidden_states += residual
-        hidden_states = hidden_states + self.mlp(
-            self.post_attention_layernorm(hidden_states)
-        )
-        return hidden_states, present_key_value
+        hidden_states = hidden_states + self.mlp(self.post_attention_layernorm(hidden_states))
+        return hidden_states
 
 
 class MiniMindModel(nn.Module):
     def __init__(self, config: MiniMindConfig):
         super().__init__()
         self.config = config
-        self.vocab_size, self.num_hidden_layers = (
-            config.vocab_size,
-            config.num_hidden_layers,
-        )
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.vocab_size = config.vocab_size
+        self.num_hidden_layers = config.num_hidden_layers
+        self.embed_tokens = nn.Embedding(self.vocab_size, config.hidden_size)
         self.dropout = nn.Dropout(config.dropout)
-        self.layers = nn.ModuleList(
-            [MiniMindBlock(l, config) for l in range(self.num_hidden_layers)]
-        )
+        self.layers = nn.ModuleList([MiniMindBlock(l, config) for l in range(self.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         freqs_cos, freqs_sin = precompute_freqs_cis(
             dim=config.head_dim,
             end=config.max_position_embeddings,
             rope_base=config.rope_theta,
-            rope_scaling=config.rope_scaling,
+            rope_scaling=config.rope_parameters,
         )
         self.register_buffer("freqs_cos", freqs_cos, persistent=False)
         self.register_buffer("freqs_sin", freqs_sin, persistent=False)
+        # transformers>=5 builds the model on the meta device, so the RoPE table must be
+        # recomputed after materialization (its values are not part of the state dict).
+        self._freqs_ready = freqs_cos.device.type != "meta"
 
     def forward(
         self,
         input_ids,
         attention_mask=None,
-        past_key_values=None,
+        cache: Cache | None = None,
         use_cache=False,
         **kwargs,
     ):
         _, seq_length = input_ids.shape
-        if hasattr(past_key_values, "layers"):
-            past_key_values = None
-        past_key_values = past_key_values or [None] * len(self.layers)
-        start_pos = (
-            past_key_values[0][0].shape[1] if past_key_values[0] is not None else 0
-        )
+        if use_cache and cache is None:
+            cache = DynamicCache()
+        start_pos = cache.get_seq_length() if cache is not None else 0
         hidden_states = self.dropout(self.embed_tokens(input_ids))
         # Recompute RoPE buffers lost during meta-device init (transformers>=5.x)
-        if self.freqs_cos[0, 0] == 0:
+        if not self._freqs_ready:
             freqs_cos, freqs_sin = precompute_freqs_cis(
                 dim=self.config.head_dim,
                 end=self.config.max_position_embeddings,
                 rope_base=self.config.rope_theta,
-                rope_scaling=self.config.rope_scaling,
+                rope_scaling=self.config.rope_parameters,
             )
             self.freqs_cos, self.freqs_sin = (
                 freqs_cos.to(hidden_states.device),
                 freqs_sin.to(hidden_states.device),
             )
+            self._freqs_ready = True
         position_embeddings = (
             self.freqs_cos[start_pos : start_pos + seq_length],
             self.freqs_sin[start_pos : start_pos + seq_length],
         )
-        presents = []
-        for layer, past_key_value in zip(self.layers, past_key_values):
-            hidden_states, present = layer(
+        for layer in self.layers:
+            hidden_states = layer(
                 hidden_states,
                 position_embeddings,
-                past_key_value=past_key_value,
-                use_cache=use_cache,
+                cache=cache,
                 attention_mask=attention_mask,
             )
-            presents.append(present)
         hidden_states = self.norm(hidden_states)
         aux_loss = sum(
             [l.mlp.aux_loss for l in self.layers if isinstance(l.mlp, MOEFeedForward)],
             hidden_states.new_zeros(1).squeeze(),
         )
-        return hidden_states, presents, aux_loss
+        return hidden_states, cache, aux_loss
 
 
 class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
     config_class = MiniMindConfig
-    _tied_weights_keys: ClassVar[dict] = {
-        "lm_head.weight": "model.embed_tokens.weight"
-    }
+    _tied_weights_keys: ClassVar[dict] = {"lm_head.weight": "model.embed_tokens.weight"}
 
     def __init__(self, config: MiniMindConfig = None):
         self.config = config or MiniMindConfig()
@@ -435,14 +416,22 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
         self,
         input_ids,
         attention_mask=None,
-        past_key_values=None,
+        cache: Cache | None = None,
         use_cache=False,
         logits_to_keep=0,
         labels=None,
         **kwargs,
     ):
-        hidden_states, past_key_values, aux_loss = self.model(
-            input_ids, attention_mask, past_key_values, use_cache, **kwargs
+        # Backward compatibility: `past_key_values` was renamed to `cache` in transformers 5.
+        if cache is None:
+            cache = kwargs.pop("past_key_values", None)
+        if cache is not None and not isinstance(cache, Cache):
+            raise TypeError(
+                "`cache` must be a transformers `Cache` instance (e.g. DynamicCache); "
+                "legacy tuple-based `past_key_values` are no longer supported."
+            )
+        hidden_states, cache, aux_loss = self.model(
+            input_ids, attention_mask, cache, use_cache, **kwargs
         )
         slice_indices = (
             slice(-logits_to_keep, None)
@@ -453,14 +442,12 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
         loss = None
         if labels is not None:
             x, y = logits[..., :-1, :].contiguous(), labels[..., 1:].contiguous()
-            loss = F.cross_entropy(
-                x.view(-1, x.size(-1)), y.view(-1), ignore_index=-100
-            )
+            loss = F.cross_entropy(x.view(-1, x.size(-1)), y.view(-1), ignore_index=-100)
         return MoeCausalLMOutputWithPast(
             loss=loss,
             aux_loss=aux_loss,
             logits=logits,
-            past_key_values=past_key_values,
+            cache=cache,
             hidden_states=hidden_states,
         )
 
@@ -490,18 +477,19 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
             if attention_mask is not None
             else None
         )
-        past_key_values = kwargs.pop("past_key_values", None)
-        finished = torch.zeros(
-            input_ids.shape[0], dtype=torch.bool, device=input_ids.device
-        )
+        cache = kwargs.pop("cache", None)
+        if cache is None:
+            cache = kwargs.pop("past_key_values", None)
+        return_kv = kwargs.pop("return_kv", False)
+        finished = torch.zeros(input_ids.shape[0], dtype=torch.bool, device=input_ids.device)
         if streamer:
             streamer.put(input_ids.cpu())
         for _ in range(max_new_tokens):
-            past_len = past_key_values[0][0].shape[1] if past_key_values else 0
+            past_len = cache.get_seq_length() if cache is not None else 0
             outputs = self.forward(
                 input_ids[:, past_len:],
                 attention_mask,
-                past_key_values,
+                cache=cache,
                 use_cache=use_cache,
                 **kwargs,
             )
@@ -531,17 +519,11 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
                         score * repetition_penalty,
                     )
             if do_sample and top_k > 0:
-                logits[logits < torch.topk(logits, top_k)[0][..., -1, None]] = -float(
-                    "inf"
-                )
+                logits[logits < torch.topk(logits, top_k)[0][..., -1, None]] = -float("inf")
             if do_sample and top_p < 1.0:
                 sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-                mask = (
-                    torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1) > top_p
-                )
-                logits[
-                    mask.scatter(1, sorted_indices, F.pad(mask[..., :-1], (1, 0)))
-                ] = -float("inf")
+                mask = (torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1) > top_p)
+                logits[mask.scatter(1, sorted_indices, F.pad(mask[..., :-1], (1, 0)))] = -float("inf")
             next_token = (
                 torch.multinomial(torch.softmax(logits, dim=-1), num_samples=1)
                 if do_sample
@@ -554,7 +536,7 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
                     next_token,
                 )
             input_ids = torch.cat([input_ids, next_token], dim=-1)
-            past_key_values = outputs.past_key_values if use_cache else None
+            cache = outputs.cache if use_cache else None
             if streamer:
                 streamer.put(next_token.cpu())
             if eos_token_id is not None:
@@ -563,6 +545,6 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
                     break
         if streamer:
             streamer.end()
-        if kwargs.get("return_kv"):
-            return {"generated_ids": input_ids, "past_kv": past_key_values}
+        if return_kv:
+            return {"generated_ids": input_ids, "past_kv": cache}
         return input_ids

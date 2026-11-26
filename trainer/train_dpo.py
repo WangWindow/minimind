@@ -9,7 +9,6 @@ import time
 import warnings
 from contextlib import nullcontext
 
-import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -85,11 +84,11 @@ def train_epoch(epoch, loader, iters, ref_model, lm_config, start_step=0, beta=0
                 ref_outputs = ref_model(x)
                 ref_logits = ref_outputs.logits
             ref_log_probs = logits_to_log_probs(ref_logits, y)
-            
+
             outputs = model(x)
             logits = outputs.logits
             policy_log_probs = logits_to_log_probs(logits, y)
-            
+
             dpo_loss_val = dpo_loss(ref_log_probs, policy_log_probs, mask, beta=beta)
             loss = dpo_loss_val + outputs.aux_loss
             loss = loss / args.accumulation_steps
@@ -110,9 +109,9 @@ def train_epoch(epoch, loader, iters, ref_model, lm_config, start_step=0, beta=0
             current_aux_loss = outputs.aux_loss.item()
             current_lr = optimizer.param_groups[-1]['lr']
             eta_min = spend_time / max(step - start_step, 1) * (iters - step) // 60
-            
+
             Logger(f'Epoch:[{epoch + 1}/{args.epochs}]({step}/{iters}), loss: {current_loss:.4f}, dpo_loss: {current_dpo_loss:.4f}, aux_loss: {current_aux_loss:.4f}, learning_rate: {current_lr:.8f}, epoch_time: {eta_min:.3f}min')
-            
+
 
         if (step % args.save_interval == 0 or step == iters) and is_main_process():
             model.eval()
@@ -160,18 +159,18 @@ if __name__ == "__main__":
     local_rank = init_distributed_mode()
     if dist.is_initialized(): args.device = f"cuda:{local_rank}"
     setup_seed(42 + (dist.get_rank() if dist.is_initialized() else 0))
-    
+
     # ========== 2. 配置目录、模型参数、检查ckp ==========
     os.makedirs(args.save_dir, exist_ok=True)
     lm_config = MiniMindConfig(hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers, use_moe=bool(args.use_moe))
     ckp_data = lm_checkpoint(lm_config, weight=args.save_weight, save_dir='../checkpoints') if args.from_resume==1 else None
-    
+
     # ========== 3. 设置混合精度 ==========
     device_type = "cuda" if torch.device(args.device).type == "cuda" else "cpu"
     args.dtype = resolve_dtype(args.dtype, args.device)
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
-    
+
     # ========== 4. 定义模型和参考模型 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
     Logger(f'策略模型总参数量：{sum(p.numel() for p in model.parameters()) / 1e6:.3f} M')
@@ -180,12 +179,12 @@ if __name__ == "__main__":
     ref_model.eval()
     ref_model.requires_grad_(False)
     Logger(f'参考模型总参数量：{sum(p.numel() for p in ref_model.parameters()) / 1e6:.3f} M')
-    
+
     train_ds = DPODataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == 'float16'))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
-    
+
     # ========== 5. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0
     if ckp_data:
@@ -194,14 +193,14 @@ if __name__ == "__main__":
         if ckp_data.get('scaler'): scaler.load_state_dict(ckp_data['scaler'])
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
-    
+
     # ========== 6. 编译和分布式包装 ==========
     if args.use_compile == 1:
         model = torch.compile(model)
         Logger('torch.compile enabled')
     if dist.is_initialized():
         model = DistributedDataParallel(model, device_ids=[local_rank])
-    
+
     # ========== 7. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
@@ -209,12 +208,12 @@ if __name__ == "__main__":
         skip = start_step if (epoch == start_epoch and start_step > 0) else 0
         batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
-        if skip > 0: 
+        if skip > 0:
             Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
             train_epoch(epoch, loader, len(loader) + skip, ref_model, lm_config, start_step, args.beta)
         else:
             train_epoch(epoch, loader, len(loader), ref_model, lm_config, 0, args.beta)
-    
+
     # ========== 8. 清理分布进程 ==========
     if dist.is_initialized():
         dist.barrier()

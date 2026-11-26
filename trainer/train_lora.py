@@ -9,7 +9,6 @@ import time
 import warnings
 from contextlib import nullcontext
 
-import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
 import torch
 import torch.distributed as dist
 from torch import optim
@@ -108,29 +107,29 @@ if __name__ == "__main__":
     local_rank = init_distributed_mode()
     if dist.is_initialized(): args.device = f"cuda:{local_rank}"
     setup_seed(42 + (dist.get_rank() if dist.is_initialized() else 0))
-    
+
     # ========== 2. 配置目录、模型参数、检查ckp ==========
     os.makedirs(args.save_dir, exist_ok=True)
     lm_config = MiniMindConfig(hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers, use_moe=bool(args.use_moe))
     ckp_data = lm_checkpoint(lm_config, weight=args.lora_name, save_dir='../checkpoints') if args.from_resume==1 else None
-    
+
     # ========== 3. 设置混合精度 ==========
     device_type = "cuda" if torch.device(args.device).type == "cuda" else "cpu"
     args.dtype = resolve_dtype(args.dtype, args.device)
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
-    
+
     # ========== 4. 定义模型、应用LoRA、冻结非LoRA参数 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
     apply_lora(model, rank=args.lora_rank, lora_alpha=args.lora_alpha)
-    
+
     # 统计参数
     total_params = sum(p.numel() for p in model.parameters())
     lora_params_count = sum(p.numel() for name, p in model.named_parameters() if 'lora' in name)
     Logger(f"LLM 总参数量: {total_params / 1e6:.3f} M")
     Logger(f"LoRA 参数量: {lora_params_count / 1e6:.3f} M")
     Logger(f"LoRA 参数占比: {lora_params_count / total_params * 100:.2f}%")
-    
+
     # 冻结非LoRA参数，收集LoRA参数
     lora_params = []
     for name, param in model.named_parameters():
@@ -139,13 +138,13 @@ if __name__ == "__main__":
             lora_params.append(param)
         else:
             param.requires_grad = False
-    
+
     # ========== 5. 定义数据和优化器 ==========
     train_ds = SFTDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == 'float16'))
     optimizer = optim.AdamW(lora_params, lr=args.learning_rate)
-    
+
     # ========== 6. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0
     if ckp_data:
@@ -154,14 +153,14 @@ if __name__ == "__main__":
         if ckp_data.get('scaler'): scaler.load_state_dict(ckp_data['scaler'])
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
-    
+
     # ========== 7. 编译和分布式包装 ==========
     if args.use_compile == 1:
         args.use_compile = 0
         Logger('[LoRA] monkey-patch forward 与 torch.compile 不兼容，use_compile 已自动关闭')
     if dist.is_initialized():
         model = DistributedDataParallel(model, device_ids=[local_rank])
-    
+
     # ========== 8. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
@@ -169,12 +168,12 @@ if __name__ == "__main__":
         skip = start_step if (epoch == start_epoch and start_step > 0) else 0
         batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
-        if skip > 0: 
+        if skip > 0:
             Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
             train_epoch(epoch, loader, len(loader) + skip, lora_params, start_step)
         else:
             train_epoch(epoch, loader, len(loader), lora_params, 0)
-    
+
     # ========== 9. 清理分布进程 ==========
     if dist.is_initialized():
         dist.barrier()

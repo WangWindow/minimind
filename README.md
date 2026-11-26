@@ -513,7 +513,7 @@ MiniMind训练数据集下载地址： [ModelScope](https://www.modelscope.cn/da
 将下载的数据集文件放到`./dataset/`目录下（✨为推荐的必须项）
 
 ```bash
-./dataset/
+./data/
 ├── agent_rl.jsonl (86MB)
 ├── agent_rl_math.jsonl (18MB)
 ├── dpo.jsonl (53MB)
