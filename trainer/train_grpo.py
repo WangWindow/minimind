@@ -19,7 +19,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, DistributedSampler
 
-from dataset.lm_dataset import RLAIFDataset
+from lm_dataset import RLAIFDataset
 from model.model_minimind import MiniMindConfig
 from trainer.rollout_engine import create_rollout_engine
 from trainer.trainer_utils import (

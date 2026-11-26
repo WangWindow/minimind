@@ -17,7 +17,7 @@ from torch import optim
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
-from dataset.lm_dataset import DPODataset
+from lm_dataset import DPODataset
 from model.model_minimind import MiniMindConfig
 from trainer.trainer_utils import (
     Logger,

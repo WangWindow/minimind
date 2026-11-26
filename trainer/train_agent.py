@@ -21,7 +21,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, DistributedSampler
 
-from dataset.lm_dataset import AgentRLDataset
+from lm_dataset import AgentRLDataset
 from model.model_minimind import MiniMindConfig
 from trainer.rollout_engine import compute_per_token_logps, create_rollout_engine
 from trainer.trainer_utils import (
