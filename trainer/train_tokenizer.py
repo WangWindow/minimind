@@ -94,7 +94,7 @@ def train_tokenizer(data_path, tokenizer_dir, vocab_size, special_tokens_num=SPE
             "normalized": False,
             "rstrip": False,
             "single_word": False,
-            "special": True if token in special_tokens_list else False
+            "special": token in special_tokens_list
         }
 
     config = {

@@ -19,7 +19,6 @@ dependencies = [
     "pydantic>=2.14",
     # evaluation / rollout
     "openai>=3.59",
-    "requests>=2.34",
     # model & dataset download
     "modelscope>=1.40",
 ]

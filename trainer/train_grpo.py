@@ -72,7 +72,7 @@ def calculate_rewards(prompts, responses, reward_model):
     return rewards
 
 
-def grpo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, reward_model, start_step=0, use_sglang=False):
+def grpo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, reward_model, start_step=0):
     for step, batch in enumerate(loader, start=start_step + 1):
         prompts = batch['prompt']  # list[str], length B
         prompt_inputs = tokenizer(prompts, return_tensors="pt", padding=True, return_token_type_ids=False,
@@ -157,7 +157,6 @@ def grpo_train_epoch(epoch, loader, iters, rollout_engine, ref_model, reward_mod
 
         if step % args.log_interval == 0 or step == iters:
             policy_loss_val = loss.item() * args.accumulation_steps
-            current_aux_loss = aux_loss.item()
             avg_reward_val = rewards.mean().item()
             avg_len_val = completion_mask.sum(dim=1).float().mean().item()
             kl_ref_val = ((ref_per_token_logps - per_token_logps) * completion_mask).sum().item() / max(completion_mask.sum().item(), 1)
@@ -221,10 +220,6 @@ if __name__ == "__main__":
     parser.add_argument("--debug_mode", action="store_true", help="是否打印训练调试采样")
     parser.add_argument("--debug_interval", type=int, default=20, help="debug模式下每隔多少step打印一次采样")
     parser.add_argument("--thinking_ratio", type=float, default=0.9, help="按概率开启thinking（0.0~1.0）")
-    parser.add_argument("--rollout_engine", type=str, default="torch", choices=["torch", "sglang"], help="rollout引擎类型")
-    parser.add_argument("--sglang_base_url", type=str, default="http://localhost:8998", help="SGLang服务器URL")
-    parser.add_argument("--sglang_model_path", type=str, default="../model", help="SGLang tokenizer路径")
-    parser.add_argument("--sglang_shared_path", type=str, default="./sglang_ckpt_grpo", help="SGLang共享存储路径")
     args = parser.parse_args()
 
     # ========== 1. 初始化环境和随机种子 ==========
@@ -253,16 +248,12 @@ if __name__ == "__main__":
     ref_model = ref_model.eval().requires_grad_(False)
     # Reward模型
     reward_model = LMForRewardModel(args.reward_model_path, device=args.device, dtype=torch.float16)
-    # Rollout引擎（可插拔替换，只负责 policy 推理）
+    # Rollout引擎（只负责 policy 推理）
     rollout_engine = create_rollout_engine(
-        engine_type=args.rollout_engine,
         policy_model=model,
         tokenizer=tokenizer,
         device=args.device,
         autocast_ctx=autocast_ctx,
-        sglang_base_url=args.sglang_base_url,
-        sglang_model_path=args.sglang_model_path,
-        sglang_shared_path=args.sglang_shared_path,
     )
     # 数据和优化器
     train_ds = RLAIFDataset(args.data_path, tokenizer, max_length=lm_config.max_seq_len, thinking_ratio=args.thinking_ratio)
@@ -300,9 +291,9 @@ if __name__ == "__main__":
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
         if skip > 0: 
             Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
-            grpo_train_epoch(epoch, loader, len(loader) + skip, rollout_engine, ref_model, reward_model, start_step, use_sglang = (args.rollout_engine == "sglang"))
+            grpo_train_epoch(epoch, loader, len(loader) + skip, rollout_engine, ref_model, reward_model, start_step)
         else:
-            grpo_train_epoch(epoch, loader, len(loader), rollout_engine, ref_model, reward_model, 0, use_sglang = (args.rollout_engine == "sglang"))
+            grpo_train_epoch(epoch, loader, len(loader), rollout_engine, ref_model, reward_model, 0)
     
     # ========== 8. 清理分布进程 ==========
     if dist.is_initialized():

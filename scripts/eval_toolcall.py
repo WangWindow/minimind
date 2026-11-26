@@ -3,6 +3,7 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import argparse
+import contextlib
 import json
 import random
 import re
@@ -87,10 +88,8 @@ def parse_tool_calls(text):
     matches = re.findall(r"<tool_call>(.*?)</tool_call>", text, re.DOTALL)
     calls = []
     for m in matches:
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             calls.append(json.loads(m.strip()))
-        except Exception:
-            pass
     return calls
 
 
@@ -101,7 +100,7 @@ def parse_tool_call_from_text(content):
         return None
     tool_calls = []
     for i, match in enumerate(matches):
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             data = json.loads(match)
             tool_calls.append(
                 {
@@ -114,8 +113,6 @@ def parse_tool_call_from_text(content):
                     },
                 }
             )
-        except Exception:
-            pass
     return tool_calls if tool_calls else None
 
 
@@ -124,14 +121,14 @@ def execute_tool(call, arguments=None):
     try:
         raw_args = call.get("arguments", {}) if isinstance(call, dict) else arguments
         args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-    except Exception:
+    except (TypeError, ValueError):
         args = {}
     fn = MOCK_RESULTS.get(name)
     if not fn:
         return {"error": f"未知工具: {name}"}
     try:
         return fn(args)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - 工具函数可能抛出任意异常
         return {"error": f"工具执行失败: {str(e)[:80]}"}
 
 

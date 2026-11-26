@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -105,7 +106,7 @@ def parse_response(text):
         text = parts[1].strip() if len(parts) > 1 else ""
     tool_calls = []
     for i, m in enumerate(re.findall(r"<tool_call>(.*?)</tool_call>", text, re.DOTALL)):
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             call = json.loads(m.strip())
             tool_calls.append(
                 {
@@ -119,8 +120,6 @@ def parse_response(text):
                     },
                 }
             )
-        except Exception:
-            pass
     if tool_calls:
         text = re.sub(r"<tool_call>.*?</tool_call>", "", text, flags=re.DOTALL)
     return text.strip(), reasoning_content, tool_calls or None
@@ -155,7 +154,7 @@ def generate_stream_response(
                     eos_token_id=tokenizer.eos_token_id,
                     streamer=streamer,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - 后台生成线程需兜底所有异常
                 queue.put({"error": str(e)})
                 queue.put(None)
 
@@ -256,7 +255,7 @@ def generate_stream_response(
             ensure_ascii=False,
         )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - 流式接口统一返回错误信息
         yield json.dumps({"error": str(e)})
 
 
@@ -323,7 +322,7 @@ def chat_completions(request: ChatRequest):
                     }
                 ],
             }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - API 错误统一转换为 HTTP 500
         raise HTTPException(status_code=500, detail=str(e))
 
 

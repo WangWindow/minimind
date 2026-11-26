@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import random
@@ -245,7 +246,6 @@ def execute_tool(tool_name, args):
         if tool_name == "calculate_math":
             return {"result": safe_math_eval(args.get("expression", "0"))}
         elif tool_name == "get_current_time":
-            tz = args.get("timezone", "Asia/Shanghai")
             return {"result": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         elif tool_name == "random_number":
             return {"result": random.randint(args.get("min", 0), args.get("max", 100))}
@@ -264,7 +264,7 @@ def execute_tool(tool_name, args):
         elif tool_name == "translate_text":
             return {"result": "[翻译结果]: hello world"}
         return {"result": "Unknown tool"}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - 工具函数可能抛出任意异常
         return {"error": str(e)}
 
 
@@ -278,7 +278,7 @@ def process_assistant_content(content, is_streaming=False):
                 name = tc.get("name", "unknown")
                 args = tc.get("arguments", {})
                 return f'<div style="background: rgba(80, 110, 150, 0.20); border: 1px solid rgba(140, 170, 210, 0.30); padding: 10px 12px; border-radius: 12px; margin: 6px 0;"><div style="font-size:12px;opacity:.75;display:block;margin:0 0 6px 0;line-height:1;">ToolCalling</div><div><b>{name}</b>: {json.dumps(args, ensure_ascii=False)}</div></div>'
-            except:
+            except json.JSONDecodeError:
                 return match.group(0)
 
         content = re.sub(
@@ -510,7 +510,6 @@ def main():
 
     if hasattr(st.session_state, "regenerate") and st.session_state.regenerate:
         prompt = st.session_state.last_user_message
-        regenerate_index = st.session_state.regenerate_index
         delattr(st.session_state, "regenerate")
         delattr(st.session_state, "last_user_message")
         delattr(st.session_state, "regenerate_index")
@@ -594,7 +593,7 @@ def main():
             )
             tool_results = []
             for tc_str in tool_calls:
-                try:
+                with contextlib.suppress(Exception):
                     tc = json.loads(tc_str.strip())
                     result = execute_tool(tc.get("name", ""), tc.get("arguments", {}))
                     st.session_state.chat_messages.append(
@@ -606,8 +605,6 @@ def main():
                     tool_results.append(
                         f'<div style="background: rgba(90, 130, 110, 0.20); border: 1px solid rgba(150, 200, 170, 0.30); padding: 10px 12px; border-radius: 12px; margin: 6px 0;"><div style="font-size:12px;opacity:.75;display:block;margin:0 0 6px 0;line-height:1;">ToolCalled</div><div><b>{tc.get("name", "")}</b>: {json.dumps(result, ensure_ascii=False)}</div></div>'
                     )
-                except:
-                    pass
             full_answer += "\n" + "\n".join(tool_results) + "\n"
             placeholder.markdown(
                 process_assistant_content(full_answer, is_streaming=True),

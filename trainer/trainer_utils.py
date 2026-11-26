@@ -68,7 +68,7 @@ def get_lr(current_step, total_steps, lr, warmup_ratio=0.0):
 
 # ======== 分布式初始化 ========
 def init_distributed_mode():
-    if int(os.environ.get("RANK", -1)) == -1:
+    if int(os.environ.get("RANK", "-1")) == -1:
         return 0  # 非DDP模式
 
     dist.init_process_group(backend="nccl")

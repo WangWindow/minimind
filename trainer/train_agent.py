@@ -10,7 +10,7 @@ import math
 import random
 import re
 import warnings
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 
 import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
 import torch
@@ -186,6 +186,17 @@ UNIT_DATA = {
 }
 
 # ======== 模拟执行 ========
+
+def _weather_result(args):
+    weather = WEATHER_DATA.get(args.get("location"), ("22°C", "晴"))
+    return {
+        "city": args.get("location"),
+        "temperature": weather[0],
+        "humidity": "65%",
+        "condition": weather[1],
+    }
+
+
 MOCK_RESULTS = {
     "calculate_math": lambda args: {
         "result": str(safe_math_eval(args.get("expression", "0")))
@@ -200,14 +211,7 @@ MOCK_RESULTS = {
             4,
         )
     },
-    "get_current_weather": lambda args: (
-        lambda w: {
-            "city": args.get("location"),
-            "temperature": w[0],
-            "humidity": "65%",
-            "condition": w[1],
-        }
-    )(WEATHER_DATA.get(args.get("location"), ("22°C", "晴"))),
+    "get_current_weather": _weather_result,
     "get_current_time": lambda args: {
         "datetime": TIME_DATA.get(
             args.get("timezone", "Asia/Shanghai"), "2025-03-07 14:30:00"
@@ -247,10 +251,9 @@ CHECK_ARGS = {
 def parse_tool_calls(text):
     calls = []
     for m in re.findall(r"<tool_call>(.*?)</tool_call>", text, re.DOTALL):
-        try:
+        call = None
+        with suppress(json.JSONDecodeError):
             call = json.loads(m.strip())
-        except:
-            continue
         if not isinstance(call, dict):
             continue
         args = call.get("arguments", {})
@@ -277,7 +280,7 @@ def execute_tool(name, args, valid_names=None):
         return {"error": f"工具参数无效: {name}"}
     try:
         return fn(args)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - 工具函数可能抛出任意异常
         return {"error": f"工具执行失败: {str(e)[:80]}"}
 
 
@@ -575,7 +578,6 @@ def rl_train_epoch(
     ref_model,
     reward_model=None,
     start_step=0,
-    use_sglang=False,
 ):
     for step, batch in enumerate(loader, start=start_step + 1):
         messages_batch = batch["messages"]
@@ -910,28 +912,6 @@ if __name__ == "__main__":
         default="../../internlm2-1_8b-reward",
         help="Reward模型路径",
     )
-    parser.add_argument(
-        "--rollout_engine",
-        type=str,
-        default="torch",
-        choices=["torch", "sglang"],
-        help="rollout引擎类型",
-    )
-    parser.add_argument(
-        "--sglang_base_url",
-        type=str,
-        default="http://localhost:8998",
-        help="SGLang服务器URL",
-    )
-    parser.add_argument(
-        "--sglang_model_path", type=str, default="../model", help="SGLang tokenizer路径"
-    )
-    parser.add_argument(
-        "--sglang_shared_path",
-        type=str,
-        default="./sglang_ckpt_agent",
-        help="SGLang共享存储路径",
-    )
     args = parser.parse_args()
 
     local_rank = init_distributed_mode()
@@ -970,14 +950,10 @@ if __name__ == "__main__":
     Logger(f"Loaded reward model from {args.reward_model_path}")
     # Rollout引擎
     rollout_engine = create_rollout_engine(
-        engine_type=args.rollout_engine,
         policy_model=model,
         tokenizer=tokenizer,
         device=args.device,
         autocast_ctx=autocast_ctx,
-        sglang_base_url=args.sglang_base_url,
-        sglang_model_path=args.sglang_model_path,
-        sglang_shared_path=args.sglang_shared_path,
     )
     train_ds = AgentRLDataset(
         args.data_path, tokenizer, max_length=lm_config.max_seq_len
@@ -1047,7 +1023,6 @@ if __name__ == "__main__":
                 ref_model,
                 reward_model,
                 start_step,
-                use_sglang=(args.rollout_engine == "sglang"),
             )
         else:
             rl_train_epoch(
@@ -1058,7 +1033,6 @@ if __name__ == "__main__":
                 ref_model,
                 reward_model,
                 0,
-                use_sglang=(args.rollout_engine == "sglang"),
             )
 
     if dist.is_initialized():

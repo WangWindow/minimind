@@ -1228,19 +1228,10 @@ $$
 **训练方式**：
 
 ```bash
-# ① 默认使用torch做rollout
 # 方式1
 torchrun --nproc_per_node N train_agent.py
 # 方式2
 python train_agent.py
-```
-
-```bash
-# ② 使用sglang做rollout
-# 需先启动sglang server：
-python -m sglang.launch_server --model-path ./minimind-3 --attention-backend triton --host 0.0.0.0 --port 8998
-# 训练参数可参考：
-python train_agent.py --rollout_engine sglang --sglang_base_url http://localhost:8998 --sglang_shared_path ./ckpt_mm --data_path ../dataset/agent_rl_math.jsonl
 ```
 
 > 训练后的模型权重文件默认每隔`save_interval步`保存为: `agent_*.pth`
@@ -1694,18 +1685,6 @@ minimind-3-exam 不是更大的基座模型，也几乎没有额外注入新知�
         "open_thinking": true
     }'
     ```
-
-## <img src="https://avatars.githubusercontent.com/u/147780389?s=48&v=4" height="28" style="vertical-align: middle;"/> [SGLang](https://github.com/sgl-project/sglang)
-
-SGLang 是高性能大模型推理引擎，支持 RadixAttention、连续批处理等优化技术，能够提供较低延迟与较高吞吐。
-
-> ⚠️ 需要 CUDA 环境，按需使用。也可在 RL 训练脚本中选择 SGLang 作为 rollout / 推理引擎以提升训练吞吐。
-
-以 OpenAI-compatible API server 形式启动模型：
-
-```bash
-python -m sglang.launch_server --model-path /path/to/model --attention-backend triton --host 0.0.0.0 --port 8998
-```
 
 ## <img src="https://avatars.githubusercontent.com/u/136984999" height="28" style="vertical-align: middle;"/> [vllm](https://github.com/vllm-project/vllm)
 

@@ -44,26 +44,23 @@ def convert_torch2transformers_minimind(
             os.path.join(transformers_path, "tokenizer_config.json"),
             os.path.join(transformers_path, "config.json"),
         )
-        json.dump(
+        with open(tokenizer_config_path, "r", encoding="utf-8") as f:
+            tokenizer_config = json.load(f)
+        tokenizer_config.update(
             {
-                **json.load(open(tokenizer_config_path, "r", encoding="utf-8")),
                 "tokenizer_class": "PreTrainedTokenizerFast",
                 "extra_special_tokens": {},
-            },
-            open(tokenizer_config_path, "w", encoding="utf-8"),
-            indent=2,
-            ensure_ascii=False,
+            }
         )
-        config = json.load(open(config_path, "r", encoding="utf-8"))
+        with open(tokenizer_config_path, "w", encoding="utf-8") as f:
+            json.dump(tokenizer_config, f, indent=2, ensure_ascii=False)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
         config["rope_theta"] = lm_config.rope_theta
         config["rope_scaling"] = None
         del config["rope_parameters"]
-        json.dump(
-            config,
-            open(config_path, "w", encoding="utf-8"),
-            indent=2,
-            ensure_ascii=False,
-        )
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
     print(f"模型已保存为 Transformers-MiniMind 格式: {transformers_path}")
 
 
@@ -146,26 +143,23 @@ def convert_torch2transformers(torch_path, transformers_path, dtype=torch.float1
             os.path.join(transformers_path, "tokenizer_config.json"),
             os.path.join(transformers_path, "config.json"),
         )
-        json.dump(
+        with open(tokenizer_config_path, "r", encoding="utf-8") as f:
+            tokenizer_config = json.load(f)
+        tokenizer_config.update(
             {
-                **json.load(open(tokenizer_config_path, "r", encoding="utf-8")),
                 "tokenizer_class": "PreTrainedTokenizerFast",
                 "extra_special_tokens": {},
-            },
-            open(tokenizer_config_path, "w", encoding="utf-8"),
-            indent=2,
-            ensure_ascii=False,
+            }
         )
-        config = json.load(open(config_path, "r", encoding="utf-8"))
+        with open(tokenizer_config_path, "w", encoding="utf-8") as f:
+            json.dump(tokenizer_config, f, indent=2, ensure_ascii=False)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
         config["rope_theta"] = lm_config.rope_theta
         config["rope_scaling"] = None
         del config["rope_parameters"]
-        json.dump(
-            config,
-            open(config_path, "w", encoding="utf-8"),
-            indent=2,
-            ensure_ascii=False,
-        )
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
     print(f"模型已保存为 Transformers 格式: {transformers_path}")
 
 

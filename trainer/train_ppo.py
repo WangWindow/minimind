@@ -336,10 +336,6 @@ if __name__ == "__main__":
     parser.add_argument("--debug_interval", type=int, default=20, help="debug模式下每隔多少step打印一次采样")
     parser.add_argument("--debug_log_ratio", action="store_true", help="打印首轮首个minibatch的log_ratio差异量级，用于核查ratio≈1是否成立")
     parser.add_argument("--thinking_ratio", type=float, default=0.9, help="按概率开启thinking（0.0~1.0）")
-    parser.add_argument("--rollout_engine", type=str, default="torch", choices=["torch", "sglang"], help="rollout引擎类型")
-    parser.add_argument("--sglang_base_url", type=str, default="http://localhost:8998", help="SGLang服务器URL")
-    parser.add_argument("--sglang_model_path", type=str, default="../model", help="SGLang tokenizer路径")
-    parser.add_argument("--sglang_shared_path", type=str, default="./sglang_ckpt_ppo", help="SGLang共享存储路径")
     args = parser.parse_args()
 
     # ========== 1. 初始化环境和随机种子 ==========
@@ -373,14 +369,10 @@ if __name__ == "__main__":
     reward_model = LMForRewardModel(args.reward_model_path, device=args.device, dtype=torch.float16)
     # Rollout引擎
     rollout_engine = create_rollout_engine(
-        engine_type=args.rollout_engine,
         policy_model=actor_model,
         tokenizer=tokenizer,
         device=args.device,
         autocast_ctx=autocast_ctx,
-        sglang_base_url=args.sglang_base_url,
-        sglang_model_path=args.sglang_model_path,
-        sglang_shared_path=args.sglang_shared_path,
     )
     train_ds = RLAIFDataset(args.data_path, tokenizer, max_length=(args.max_seq_len + args.max_gen_len), thinking_ratio=args.thinking_ratio)
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None

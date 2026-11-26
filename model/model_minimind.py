@@ -1,4 +1,5 @@
 import math
+from typing import ClassVar
 
 import torch
 import torch.nn.functional as F
@@ -80,7 +81,7 @@ def precompute_freqs_cis(
     dim: int,
     end: int = (32 * 1024),
     rope_base: float = 1e6,
-    rope_scaling: dict = None,
+    rope_scaling: dict | None = None,
 ):
     freqs, attn_factor = (
         1.0 / (rope_base ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)),
@@ -237,7 +238,7 @@ class Attention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, config: MiniMindConfig, intermediate_size: int = None):
+    def __init__(self, config: MiniMindConfig, intermediate_size: int | None = None):
         super().__init__()
         intermediate_size = intermediate_size or config.intermediate_size
         self.gate_proj = nn.Linear(config.hidden_size, intermediate_size, bias=False)
@@ -371,7 +372,7 @@ class MiniMindModel(nn.Module):
         use_cache=False,
         **kwargs,
     ):
-        batch_size, seq_length = input_ids.shape
+        _, seq_length = input_ids.shape
         if hasattr(past_key_values, "layers"):
             past_key_values = None
         past_key_values = past_key_values or [None] * len(self.layers)
@@ -415,7 +416,9 @@ class MiniMindModel(nn.Module):
 
 class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
     config_class = MiniMindConfig
-    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
+    _tied_weights_keys: ClassVar[dict] = {
+        "lm_head.weight": "model.embed_tokens.weight"
+    }
 
     def __init__(self, config: MiniMindConfig = None):
         self.config = config or MiniMindConfig()
