@@ -307,6 +307,7 @@ vllm serve /path/to/model --served-model-name "minimind"
 
 ```python
 import torch
+
 print(torch.cuda.is_available())
 ```
 
@@ -374,13 +375,15 @@ python eval_llm.py --weight full_sft
 <details>
 <summary>注：其它须知</summary>
 
-1、所有训练脚本均基于 PyTorch 原生实现，并支持多卡加速。
+1、所有模型训练脚本均基于 PyTorch 原生实现，并统一使用 `Accelerate` 管理单卡/多卡、混合精度与梯度累积。
 
-2、若你的设备有 `N (N > 1)` 张显卡，可通过以下方式启动单机 `N` 卡训练（DDP，也支持扩展到多机多卡）：
+2、若你的设备有 `N` 张显卡，通过以下方式启动单机 `N` 卡训练：
 
 ```bash
-torchrun --nproc_per_node N train_xxx.py
+accelerate launch --num_processes N train_xxx.py
 ```
+
+3、`accelerate config` 中选择 `multi-GPU` 并关闭 DeepSpeed/FSDP；当前训练循环只支持单卡/DDP。
 
 </details>
 
@@ -699,7 +702,7 @@ LLM 首先要学会的是先把尽可能多的基础知识和语言规律吸收�
 
 ```bash
 # 方式1
-torchrun --nproc_per_node 1 train_pretrain.py # 1即为单卡训练，可根据硬件情况自行调整 (设置>=2)
+accelerate launch --num_processes 1 train_pretrain.py # 1即为单卡训练，可根据硬件情况自行调整 (设置>=2)
 # 方式2
 python train_pretrain.py
 ```
@@ -729,7 +732,7 @@ SFT 并不只是把模型调成“更会聊天”，它同样可以继续向模�
 
 ```bash
 # 方式1
-torchrun --nproc_per_node 1 train_full_sft.py
+accelerate launch --num_processes 1 train_full_sft.py
 # 方式2
 python train_full_sft.py
 ```
@@ -774,7 +777,7 @@ python eval_llm.py --weight full_sft
 
 ```bash
 # 方式1
-torchrun --nproc_per_node 1 train_distillation.py
+accelerate launch --num_processes 1 train_distillation.py
 # 方式2
 python train_distillation.py
 ```
@@ -787,7 +790,7 @@ LoRA 是一种常见的参数高效微调（Parameter-Efficient Fine-Tuning, PEF
 ```bash
 # train_lora.py 在 CPU 上通常也能比较轻快地完成
 # 方式1
-cd trainer && torchrun --nproc_per_node 1 train_lora.py
+cd trainer && accelerate launch --num_processes 1 train_lora.py
 # 方式2
 cd trainer && python train_lora.py
 ```
@@ -900,7 +903,7 @@ response = client.chat.completions.create(
     model="minimind",
     messages=[{"role": "user", "content": "你是谁？"}],
     # ...
-    extra_body={"chat_template_kwargs": {"open_thinking": True}} # 思考开关
+    extra_body={"chat_template_kwargs": {"open_thinking": True}},  # 思考开关
 )
 ```
 
@@ -986,7 +989,7 @@ $$\mathcal{L}_{DPO} = -\mathbb{E}\left[\log \sigma\left(\beta \left[\log \frac{\
 
 ```bash
 # 方式1
-torchrun --nproc_per_node 1 train_dpo.py
+accelerate launch --num_processes 1 train_dpo.py
 # 方式2
 python train_dpo.py
 ```
@@ -1127,7 +1130,7 @@ MiniMind 的 PPO 实现包含 Actor（生成回答）、Critic（评估回答价
 
 ```bash
 # 方式1
-torchrun --nproc_per_node N train_ppo.py
+accelerate launch --num_processes N train_ppo.py
 # 方式2
 python train_ppo.py
 ```
@@ -1163,7 +1166,7 @@ GRPO 更显著的问题是退化组（Degenerate Groups）：如果某个问题�
 
 ```bash
 # 方式1
-torchrun --nproc_per_node N train_grpo.py
+accelerate launch --num_processes N train_grpo.py
 # 方式2
 python train_grpo.py
 ```
@@ -1229,7 +1232,7 @@ $$
 
 ```bash
 # 方式1
-torchrun --nproc_per_node N train_agent.py
+accelerate launch --num_processes N train_agent.py
 # 方式2
 python train_agent.py
 ```

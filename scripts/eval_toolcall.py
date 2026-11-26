@@ -75,9 +75,7 @@ def init_model(args):
         ckp = f"./{args.save_dir}/{args.weight}_{args.hidden_size}{moe_suffix}.pth"
         model.load_state_dict(torch.load(ckp, map_location=args.device), strict=True)
     else:
-        model = AutoModelForCausalLM.from_pretrained(
-            args.load_from, trust_remote_code=True
-        )
+        model = AutoModelForCausalLM.from_pretrained(args.load_from, trust_remote_code=True)
     get_model_params(model, model.config)
     if torch.device(args.device).type == "cuda":
         model = model.half()
@@ -107,9 +105,7 @@ def parse_tool_call_from_text(content):
                     "id": f"call_{i}",
                     "function": {
                         "name": data.get("name", ""),
-                        "arguments": json.dumps(
-                            data.get("arguments", {}), ensure_ascii=False
-                        ),
+                        "arguments": json.dumps(data.get("arguments", {}), ensure_ascii=False),
                     },
                 }
             )
@@ -121,7 +117,7 @@ def execute_tool(call, arguments=None):
     try:
         raw_args = call.get("arguments", {}) if isinstance(call, dict) else arguments
         args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         args = {}
     fn = MOCK_RESULTS.get(name)
     if not fn:
@@ -196,18 +192,14 @@ def chat_api(client, messages, tools, args, stream=True):
             for tc_chunk in delta.tool_calls:
                 idx = tc_chunk.index if tc_chunk.index is not None else len(tool_calls)
                 while len(tool_calls) <= idx:
-                    tool_calls.append(
-                        {"id": "", "function": {"name": "", "arguments": ""}}
-                    )
+                    tool_calls.append({"id": "", "function": {"name": "", "arguments": ""}})
                 if tc_chunk.id:
                     tool_calls[idx]["id"] += tc_chunk.id
                 if tc_chunk.function:
                     if tc_chunk.function.name:
                         tool_calls[idx]["function"]["name"] += tc_chunk.function.name
                     if tc_chunk.function.arguments:
-                        tool_calls[idx]["function"]["arguments"] += (
-                            tc_chunk.function.arguments
-                        )
+                        tool_calls[idx]["function"]["arguments"] += tc_chunk.function.arguments
     print()
     if not tool_calls:
         tool_calls = parse_tool_call_from_text(content)
@@ -221,18 +213,14 @@ def run_case(prompt, tools, args, model=None, tokenizer=None, client=None):
             content = generate(model, tokenizer, messages, tools, args)
             tool_calls = parse_tool_calls(content)
         else:
-            content, tool_calls = chat_api(
-                client, messages, tools, args, stream=bool(args.stream)
-            )
+            content, tool_calls = chat_api(client, messages, tools, args, stream=bool(args.stream))
         if not tool_calls:
             break
         tool_calls = (
             [
                 {
                     "id": tc.id if hasattr(tc, "id") else tc.get("id", ""),
-                    "name": tc.function.name
-                    if hasattr(tc, "function")
-                    else tc["function"]["name"],
+                    "name": tc.function.name if hasattr(tc, "function") else tc["function"]["name"],
                     "arguments": tc.function.arguments
                     if hasattr(tc, "function")
                     else tc["function"]["arguments"],
@@ -313,12 +301,8 @@ def main():
         type=float,
         help="生成温度，控制随机性（0-1，越大越随机）",
     )
-    parser.add_argument(
-        "--top_p", default=0.9, type=float, help="nucleus采样阈值（0-1）"
-    )
-    parser.add_argument(
-        "--show_speed", default=0, type=int, help="显示decode速度（tokens/s）"
-    )
+    parser.add_argument("--top_p", default=0.9, type=float, help="nucleus采样阈值（0-1）")
+    parser.add_argument("--show_speed", default=0, type=int, help="显示decode速度（tokens/s）")
     parser.add_argument(
         "--device",
         default="cuda" if torch.cuda.is_available() else "cpu",
@@ -331,18 +315,14 @@ def main():
         type=str,
         help="OpenAI兼容接口的base_url",
     )
-    parser.add_argument(
-        "--api_key", default="sk-123", type=str, help="OpenAI兼容接口的api_key"
-    )
+    parser.add_argument("--api_key", default="sk-123", type=str, help="OpenAI兼容接口的api_key")
     parser.add_argument(
         "--api_model",
         default="jingyaogong/minimind-3:latest",
         type=str,
         help="API请求时使用的模型名称",
     )
-    parser.add_argument(
-        "--stream", default=1, type=int, help="API模式下是否流式输出（0=否，1=是）"
-    )
+    parser.add_argument("--stream", default=1, type=int, help="API模式下是否流式输出（0=否，1=是）")
     args = parser.parse_args()
 
     model = tokenizer = client = None

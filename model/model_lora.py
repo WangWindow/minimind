@@ -72,18 +72,13 @@ def save_lora(model, path):
 def merge_lora(model, lora_path, save_path):
     load_lora(model, lora_path)
     raw_model = getattr(model, "_orig_mod", model)
-    state_dict = {
-        k: v.cpu().half()
-        for k, v in raw_model.state_dict().items()
-        if ".lora." not in k
-    }
+    state_dict = {k: v.cpu().half() for k, v in raw_model.state_dict().items() if ".lora." not in k}
     for name, module in raw_model.named_modules():
         if isinstance(module, nn.Linear) and ".lora." not in name:
             state_dict[f"{name}.weight"] = module.weight.data.clone().cpu().float()
             if hasattr(module, "lora"):
                 delta = (
-                    module.lora.B.weight.data.float()
-                    @ module.lora.A.weight.data.float()
+                    module.lora.B.weight.data.float() @ module.lora.A.weight.data.float()
                 ) * module.lora.scaling.float()
                 state_dict[f"{name}.weight"] += delta.cpu()
             state_dict[f"{name}.weight"] = state_dict[f"{name}.weight"].half()

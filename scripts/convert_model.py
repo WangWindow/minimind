@@ -23,9 +23,7 @@ from model.model_minimind import MiniMindConfig, MiniMindForCausalLM
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-def convert_torch2transformers_minimind(
-    torch_path, transformers_path, dtype=torch.float16
-):
+def convert_torch2transformers_minimind(torch_path, transformers_path, dtype=torch.float16):
     MiniMindConfig.register_for_auto_class()
     MiniMindForCausalLM.register_for_auto_class("AutoModelForCausalLM")
     lm_model = MiniMindForCausalLM(lm_config)
@@ -82,9 +80,7 @@ def convert_torch2transformers(torch_path, transformers_path, dtype=torch.float1
         "tie_word_embeddings": lm_config.tie_word_embeddings,
     }
     if not lm_config.use_moe:
-        qwen_config = Qwen3Config(
-            **common_config, use_sliding_window=False, sliding_window=None
-        )
+        qwen_config = Qwen3Config(**common_config, use_sliding_window=False, sliding_window=None)
         qwen_model = Qwen3ForCausalLM(qwen_config)
     else:
         qwen_config = Qwen3MoeConfig(
@@ -98,9 +94,7 @@ def convert_torch2transformers(torch_path, transformers_path, dtype=torch.float1
         # ======= transformers-5.0的兼容低版本写法 =======
         if int(transformers.__version__.split(".")[0]) >= 5:
             new_sd = {
-                k: v
-                for k, v in state_dict.items()
-                if "experts." not in k or "gate.weight" in k
+                k: v for k, v in state_dict.items() if "experts." not in k or "gate.weight" in k
             }
             for l in range(lm_config.num_hidden_layers):
                 p = f"model.layers.{l}.mlp.experts"
@@ -122,10 +116,7 @@ def convert_torch2transformers(torch_path, transformers_path, dtype=torch.float1
                     dim=1,
                 )
                 new_sd[f"{p}.down_proj"] = torch.stack(
-                    [
-                        state_dict[f"{p}.{e}.down_proj.weight"]
-                        for e in range(lm_config.num_experts)
-                    ]
+                    [state_dict[f"{p}.{e}.down_proj.weight"] for e in range(lm_config.num_experts)]
                 )
             state_dict = new_sd
 
@@ -164,16 +155,12 @@ def convert_torch2transformers(torch_path, transformers_path, dtype=torch.float1
 
 
 def convert_transformers2torch(transformers_path, torch_path):
-    model = AutoModelForCausalLM.from_pretrained(
-        transformers_path, trust_remote_code=True
-    )
+    model = AutoModelForCausalLM.from_pretrained(transformers_path, trust_remote_code=True)
     torch.save({k: v.cpu().half() for k, v in model.state_dict().items()}, torch_path)
     print(f"模型已保存为 PyTorch 格式: {torch_path}")
 
 
-def convert_merge_base_lora(
-    base_torch_path, lora_path, merged_torch_path, lora_rank=16
-):
+def convert_merge_base_lora(base_torch_path, lora_path, merged_torch_path, lora_rank=16):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     lm_model = MiniMindForCausalLM(lm_config).to(device)
     state_dict = torch.load(base_torch_path, map_location=device)

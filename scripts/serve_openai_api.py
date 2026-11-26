@@ -49,12 +49,8 @@ def init_model(args):
                 f"../{args.save_dir}/{args.lora_weight}_{args.hidden_size}{moe_suffix}.pth",
             )
     else:
-        model = AutoModelForCausalLM.from_pretrained(
-            args.load_from, trust_remote_code=True
-        )
-    print(
-        f"MiniMind模型参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M(illion)"
-    )
+        model = AutoModelForCausalLM.from_pretrained(args.load_from, trust_remote_code=True)
+    print(f"MiniMind模型参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M(illion)")
     if torch.device(device).type == "cuda":
         model = model.half()
     return model.eval().to(device), tokenizer
@@ -114,9 +110,7 @@ def parse_response(text):
                     "type": "function",
                     "function": {
                         "name": call.get("name", ""),
-                        "arguments": json.dumps(
-                            call.get("arguments", {}), ensure_ascii=False
-                        ),
+                        "arguments": json.dumps(call.get("arguments", {}), ensure_ascii=False),
                     },
                 }
             )
@@ -210,11 +204,7 @@ def generate_stream_response(
                 pos = pending.find(marker)
                 if pos < 0:
                     keep = next(
-                        (
-                            n
-                            for n in range(len(marker) - 1, 0, -1)
-                            if pending.endswith(marker[:n])
-                        ),
+                        (n for n in range(len(marker) - 1, 0, -1) if pending.endswith(marker[:n])),
                         0,
                     )
                     end = len(pending) - keep
@@ -240,9 +230,7 @@ def generate_stream_response(
 
         if pending:
             field = "content" if thinking_ended else "reasoning_content"
-            yield json.dumps(
-                {"choices": [{"delta": {field: pending}}]}, ensure_ascii=False
-            )
+            yield json.dumps({"choices": [{"delta": {field: pending}}]}, ensure_ascii=False)
         yield json.dumps(
             {
                 "choices": [
@@ -285,9 +273,7 @@ def chat_completions(request: ChatRequest):
                 tools=request.tools or None,
                 open_thinking=request.get_open_thinking(),
             )
-            inputs = tokenizer(new_prompt, return_tensors="pt", truncation=True).to(
-                device
-            )
+            inputs = tokenizer(new_prompt, return_tensors="pt", truncation=True).to(device)
             with torch.no_grad():
                 generated_ids = model.generate(
                     inputs["input_ids"],

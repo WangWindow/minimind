@@ -28,15 +28,11 @@ def pre_processing_chat(conversations, add_system_ratio=0.2):
     ]
     # 概率性添加system
     if conversations[0].get("role") != "system" and random.random() < add_system_ratio:
-        return [
-            {"role": "system", "content": random.choice(SYSTEM_PROMPTS)}
-        ] + conversations
+        return [{"role": "system", "content": random.choice(SYSTEM_PROMPTS)}] + conversations
     return conversations
 
 
-def post_processing_chat(
-    prompt_content, empty_think_ratio=0.2, remove_empty_think=None
-):
+def post_processing_chat(prompt_content, empty_think_ratio=0.2, remove_empty_think=None):
     # 以80%概率移除空思考标签
     if "<think>\n\n</think>\n\n" in prompt_content:
         if remove_empty_think is None:
@@ -65,9 +61,7 @@ class PretrainDataset(Dataset):
             truncation=True,
         ).input_ids
         tokens = [self.tokenizer.bos_token_id] + tokens + [self.tokenizer.eos_token_id]
-        input_ids = tokens + [self.tokenizer.pad_token_id] * (
-            self.max_length - len(tokens)
-        )
+        input_ids = tokens + [self.tokenizer.pad_token_id] * (self.max_length - len(tokens))
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         labels = input_ids.clone()
         labels[input_ids == self.tokenizer.pad_token_id] = -100
@@ -92,15 +86,11 @@ class SFTDataset(Dataset):
                 ]
             }
         )
-        self.samples = load_dataset(
-            "json", data_files=jsonl_path, split="train", features=features
-        )
+        self.samples = load_dataset("json", data_files=jsonl_path, split="train", features=features)
         self.bos_id = tokenizer(
             f"{tokenizer.bos_token}assistant\n", add_special_tokens=False
         ).input_ids
-        self.eos_id = tokenizer(
-            f"{tokenizer.eos_token}\n", add_special_tokens=False
-        ).input_ids
+        self.eos_id = tokenizer(f"{tokenizer.eos_token}\n", add_special_tokens=False).input_ids
 
     def __len__(self):
         return len(self.samples)
@@ -154,9 +144,7 @@ class SFTDataset(Dataset):
         # for i, (x, y) in enumerate(zip(input_ids[:-1], labels[1:])):
         #     print(f"{i:3d}: X={self.tokenizer.decode([x])!r:16s} ---> Y={self.tokenizer.decode([input_ids[i+1]])!r:16s} label={y}")
         # # ================
-        return torch.tensor(input_ids, dtype=torch.long), torch.tensor(
-            labels, dtype=torch.long
-        )
+        return torch.tensor(input_ids, dtype=torch.long), torch.tensor(labels, dtype=torch.long)
 
 
 class DPODataset(Dataset):
@@ -164,15 +152,11 @@ class DPODataset(Dataset):
         super().__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.padding = (
-            tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
-        )
+        self.padding = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
         self.bos_id = tokenizer(
             f"{tokenizer.bos_token}assistant\n", add_special_tokens=False
         ).input_ids
-        self.eos_id = tokenizer(
-            f"{tokenizer.eos_token}\n", add_special_tokens=False
-        ).input_ids
+        self.eos_id = tokenizer(f"{tokenizer.eos_token}\n", add_special_tokens=False).input_ids
         self.samples = load_dataset("json", data_files=file_path, split="train")
 
     def __len__(self):
@@ -190,9 +174,7 @@ class DPODataset(Dataset):
             rejected, tokenize=False, add_generation_prompt=False
         )
         remove_empty_think = random.random() > 0.2
-        chosen_prompt = post_processing_chat(
-            chosen_prompt, remove_empty_think=remove_empty_think
-        )
+        chosen_prompt = post_processing_chat(chosen_prompt, remove_empty_think=remove_empty_think)
         rejected_prompt = post_processing_chat(
             rejected_prompt, remove_empty_think=remove_empty_think
         )
@@ -259,9 +241,7 @@ class RLAIFDataset(Dataset):
         self.bos_id = tokenizer(
             f"{tokenizer.bos_token}assistant", add_special_tokens=False
         ).input_ids
-        self.eos_id = tokenizer(
-            f"{tokenizer.eos_token}", add_special_tokens=False
-        ).input_ids
+        self.eos_id = tokenizer(f"{tokenizer.eos_token}", add_special_tokens=False).input_ids
 
     def __len__(self):
         return len(self.samples)

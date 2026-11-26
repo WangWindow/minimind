@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=2",
     "pyarrow>=25,<26",
     # training utilities
+    "accelerate>=1.16",
     "psutil>=7",
     # inference / API serving
     "fastapi>=0.165",
@@ -33,3 +34,14 @@ torch = [
 name = "pytorch-cu132"
 url = "https://download.pytorch.org/whl/cu132"
 explicit = true
+
+[tool.ruff]
+line-length = 100
+indent-width = 4
+extend-exclude = [".venv", "checkpoints", "data", "out", "build", "dist"]
+
+[tool.ruff.format]
+skip-magic-trailing-comma = false
+line-ending = "lf"
+docstring-code-format = true
+docstring-code-line-length = 80

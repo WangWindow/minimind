@@ -35,7 +35,9 @@ class MiniMindConfig(PretrainedConfig):
         self.num_key_value_heads = kwargs.get("num_key_value_heads", 4)
         self.head_dim = kwargs.get("head_dim", self.hidden_size // self.num_attention_heads)
         self.hidden_act = kwargs.get("hidden_act", "silu")
-        self.intermediate_size = kwargs.get("intermediate_size", math.ceil(hidden_size * math.pi / 64) * 64)
+        self.intermediate_size = kwargs.get(
+            "intermediate_size", math.ceil(hidden_size * math.pi / 64) * 64
+        )
         self.max_position_embeddings = kwargs.get("max_position_embeddings", 32768)
         self.rms_norm_eps = kwargs.get("rms_norm_eps", 1e-6)
         self.rope_theta = kwargs.get("rope_theta", 1e6)
@@ -58,9 +60,7 @@ class MiniMindConfig(PretrainedConfig):
         ### MoE specific configs (ignored if use_moe = False)
         self.num_experts = kwargs.get("num_experts", 4)
         self.num_experts_per_tok = kwargs.get("num_experts_per_tok", 1)
-        self.moe_intermediate_size = kwargs.get(
-            "moe_intermediate_size", self.intermediate_size
-        )
+        self.moe_intermediate_size = kwargs.get("moe_intermediate_size", self.intermediate_size)
         self.norm_topk_prob = kwargs.get("norm_topk_prob", True)
         self.router_aux_loss_coef = kwargs.get("router_aux_loss_coef", 5e-4)
 
@@ -91,9 +91,7 @@ def precompute_freqs_cis(
         1.0 / (rope_base ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)),
         1.0,
     )
-    if (
-        rope_scaling is not None
-    ):  # YaRN: f'(i) = f(i)((1-γ) + γ/s), where γ∈[0,1] is linear ramp
+    if rope_scaling is not None:  # YaRN: f'(i) = f(i)((1-γ) + γ/s), where γ∈[0,1] is linear ramp
         orig_max, factor, beta_fast, beta_slow, attn_factor = (
             rope_scaling.get("original_max_position_embeddings", 2048),
             rope_scaling.get("factor", 16),
@@ -103,8 +101,7 @@ def precompute_freqs_cis(
         )
         if end / orig_max > 1.0:
             inv_dim = lambda b: (
-                (dim * math.log(orig_max / (b * 2 * math.pi)))
-                / (2 * math.log(rope_base))
+                (dim * math.log(orig_max / (b * 2 * math.pi))) / (2 * math.log(rope_base))
             )
             low, high = (
                 max(math.floor(inv_dim(beta_fast)), 0),
@@ -126,17 +123,13 @@ def precompute_freqs_cis(
 
 def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     def rotate_half(x):
-        return torch.cat(
-            (-x[..., x.shape[-1] // 2 :], x[..., : x.shape[-1] // 2]), dim=-1
-        )
+        return torch.cat((-x[..., x.shape[-1] // 2 :], x[..., : x.shape[-1] // 2]), dim=-1)
 
     q_embed = (
-        (q * cos.unsqueeze(unsqueeze_dim))
-        + (rotate_half(q) * sin.unsqueeze(unsqueeze_dim))
+        (q * cos.unsqueeze(unsqueeze_dim)) + (rotate_half(q) * sin.unsqueeze(unsqueeze_dim))
     ).to(q.dtype)
     k_embed = (
-        (k * cos.unsqueeze(unsqueeze_dim))
-        + (rotate_half(k) * sin.unsqueeze(unsqueeze_dim))
+        (k * cos.unsqueeze(unsqueeze_dim)) + (rotate_half(k) * sin.unsqueeze(unsqueeze_dim))
     ).to(k.dtype)
     return q_embed, k_embed
 
@@ -184,8 +177,7 @@ class Attention(nn.Module):
         self.resid_dropout = nn.Dropout(config.dropout)
         self.dropout = config.dropout
         self.flash = (
-            hasattr(torch.nn.functional, "scaled_dot_product_attention")
-            and config.flash_attn
+            hasattr(torch.nn.functional, "scaled_dot_product_attention") and config.flash_attn
         )
 
     def forward(
@@ -229,9 +221,7 @@ class Attention(nn.Module):
                     (seq_len, seq_len), float("-inf"), device=scores.device
                 ).triu(1)
             if attention_mask is not None:
-                scores += (
-                    1.0 - attention_mask.to(scores.dtype).unsqueeze(1).unsqueeze(2)
-                ) * -1e9
+                scores += (1.0 - attention_mask.to(scores.dtype).unsqueeze(1).unsqueeze(2)) * -1e9
             output = self.attn_dropout(F.softmax(scores, dim=-1).type_as(xq)) @ xv
         output = output.transpose(1, 2).reshape(bsz, seq_len, -1)
         output = self.resid_dropout(self.o_proj(output))
@@ -281,7 +271,9 @@ class MOEFeedForward(nn.Module):
                     dim=-1,
                     sorted=False,
                 )[0]
-                topk_weight = (top1 - top1.detach() + 1.0)  # k=1: 1.0 forward on purpose, gradient via straight-through
+                topk_weight = (
+                    top1 - top1.detach() + 1.0
+                )  # k=1: 1.0 forward on purpose, gradient via straight-through
         y = torch.zeros_like(x_flat)
         for i, expert in enumerate(self.experts):
             mask = topk_idx == i
@@ -338,7 +330,9 @@ class MiniMindModel(nn.Module):
         self.num_hidden_layers = config.num_hidden_layers
         self.embed_tokens = nn.Embedding(self.vocab_size, config.hidden_size)
         self.dropout = nn.Dropout(config.dropout)
-        self.layers = nn.ModuleList([MiniMindBlock(l, config) for l in range(self.num_hidden_layers)])
+        self.layers = nn.ModuleList(
+            [MiniMindBlock(l, config) for l in range(self.num_hidden_layers)]
+        )
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         freqs_cos, freqs_sin = precompute_freqs_cis(
             dim=config.head_dim,
@@ -405,9 +399,7 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
         self.config = config or MiniMindConfig()
         super().__init__(self.config)
         self.model = MiniMindModel(self.config)
-        self.lm_head = nn.Linear(
-            self.config.hidden_size, self.config.vocab_size, bias=False
-        )
+        self.lm_head = nn.Linear(self.config.hidden_size, self.config.vocab_size, bias=False)
         if self.config.tie_word_embeddings:
             self.model.embed_tokens.weight = self.lm_head.weight
         self.post_init()
@@ -434,9 +426,7 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
             input_ids, attention_mask, cache, use_cache, **kwargs
         )
         slice_indices = (
-            slice(-logits_to_keep, None)
-            if isinstance(logits_to_keep, int)
-            else logits_to_keep
+            slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         )
         logits = self.lm_head(hidden_states[:, slice_indices, :])
         loss = None
@@ -473,9 +463,7 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
             raise ValueError("Sampling temperature must be finite and positive")
         input_ids = kwargs.pop("input_ids", inputs).repeat(num_return_sequences, 1)
         attention_mask = (
-            attention_mask.repeat(num_return_sequences, 1)
-            if attention_mask is not None
-            else None
+            attention_mask.repeat(num_return_sequences, 1) if attention_mask is not None else None
         )
         cache = kwargs.pop("cache", None)
         if cache is None:
@@ -504,11 +492,7 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
                 if attention_mask is not None
                 else None
             )
-            logits = (
-                outputs.logits[:, -1] / temperature
-                if do_sample
-                else outputs.logits[:, -1]
-            )
+            logits = outputs.logits[:, -1] / temperature if do_sample else outputs.logits[:, -1]
             if repetition_penalty != 1.0:
                 for i in range(input_ids.shape[0]):
                     seen = torch.unique(input_ids[i])
@@ -522,8 +506,10 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
                 logits[logits < torch.topk(logits, top_k)[0][..., -1, None]] = -float("inf")
             if do_sample and top_p < 1.0:
                 sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-                mask = (torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1) > top_p)
-                logits[mask.scatter(1, sorted_indices, F.pad(mask[..., :-1], (1, 0)))] = -float("inf")
+                mask = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1) > top_p
+                logits[mask.scatter(1, sorted_indices, F.pad(mask[..., :-1], (1, 0)))] = -float(
+                    "inf"
+                )
             next_token = (
                 torch.multinomial(torch.softmax(logits, dim=-1), num_samples=1)
                 if do_sample
